@@ -647,6 +647,33 @@
     emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
   }
 
+  // ---------------------------------------------------------------------
+  // Quiet analytics for the private dashboard (visit / start / finish).
+  // Fails silently and never affects the quiz itself if unreachable.
+  // ---------------------------------------------------------------------
+  const TRACKING_URL = "";
+  const TRACKING_WRITE_TOKEN = "23Qg3n5yPc2hDsgP0YU_QEYYce0PRmDA";
+  const sessionId = "S" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+  function trackEvent(eventName, extra) {
+    if (!TRACKING_URL) return;
+    try {
+      const payload = Object.assign({
+        token: TRACKING_WRITE_TOKEN,
+        event: eventName,
+        sessionId: sessionId,
+        hostname: location.hostname,
+      }, extra || {});
+      fetch(TRACKING_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(payload),
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  trackEvent("visit");
+
   const questions = [
     { text: "המניע הכי חזק שלי בעסק הוא ליצור מוצר או שירות ברמה המקצועית הגבוהה ביותר.", type: "artist" },
     { text: "מפריע לי מאוד להוציא תחת ידי עבודה או מוצר שהם לא מושלמים בעיניי.", type: "artist" },
@@ -772,6 +799,7 @@
       phone: regPhone.value.trim(),
       email: regEmail.value.trim(),
     };
+    trackEvent("start", { name: registrant.name, phone: registrant.phone, email: registrant.email });
     startQuiz();
   });
 
@@ -894,6 +922,10 @@
     goToScreen("screen-results");
     if (!emailSent) {
       emailSent = true;
+      trackEvent("finish", {
+        name: registrant.name, phone: registrant.phone, email: registrant.email,
+        leadRole: ordered[0], scoreYazam: scores.yazam, scoreArtist: scores.artist, scoreManager: scores.manager,
+      });
       sendResultsEmail();
     }
   }

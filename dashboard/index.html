@@ -1,0 +1,488 @@
+<!doctype html><html><head><meta charset="utf8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>דשבורד - אבחון עסקי</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@700;900&family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --gold: #B8935A; --gold-deep: #96723F; --gold-light: #E4C9AE;
+    --ink: #201A14; --navy: #14202F; --cream: #FAF7F1; --cream-2: #F2E9DA;
+    --card: #FFFFFF; --text: #241F1A; --muted: #7C6F5D; --border: #E6DCC7;
+    --good: #4C7A5E; --warn: #B85C38;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { direction: rtl; }
+  body {
+    direction: rtl; font-family: "Heebo", -apple-system, "Segoe UI", Arial, sans-serif;
+    background: var(--cream); color: var(--text); line-height: 1.55; min-height: 100vh;
+  }
+  h1, h2 { font-family: "Frank Ruhl Libre", "Heebo", serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 18px 60px; }
+
+  /* Gate */
+  #gate { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .gate-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+    padding: 36px 30px; max-width: 360px; width: 100%; text-align: center;
+    box-shadow: 0 18px 44px rgba(32,26,20,0.12);
+  }
+  .gate-card h1 { font-size: 20px; color: var(--gold-deep); margin-bottom: 6px; }
+  .gate-card p { font-size: 13px; color: var(--muted); margin-bottom: 20px; }
+  .gate-card input {
+    width: 100%; padding: 12px 14px; border-radius: 10px; border: 1.5px solid var(--border);
+    font-size: 15px; text-align: center; margin-bottom: 12px; font-family: inherit;
+  }
+  .gate-card input:focus { outline: none; border-color: var(--gold); }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 12px 26px; border-radius: 999px; font-weight: 700; font-size: 14.5px;
+    text-decoration: none; border: none; cursor: pointer; font-family: "Heebo", sans-serif;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: linear-gradient(135deg, var(--gold), var(--gold-deep)); color: #fff; width: 100%; box-shadow: 0 8px 18px rgba(150,114,63,.28); }
+  .btn-outline { background: #fff; color: var(--gold-deep); border: 1.5px solid var(--gold-light); }
+  .gate-err { color: var(--warn); font-size: 12.5px; margin-top: 10px; min-height: 16px; }
+
+  /* Dashboard */
+  #dash { display: none; }
+  .dash-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
+  .dash-head h1 { font-size: 22px; color: var(--gold-deep); }
+  .dash-head .sub { font-size: 12.5px; color: var(--muted); }
+  .head-actions { display: flex; gap: 8px; }
+  .icon-btn {
+    background: #fff; border: 1.5px solid var(--border); border-radius: 10px; padding: 9px 14px;
+    font-size: 13px; font-weight: 700; color: var(--gold-deep); cursor: pointer; font-family: inherit;
+  }
+  .icon-btn:hover { border-color: var(--gold); }
+
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .stat-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 14px; text-align: center;
+  }
+  .stat-card .num { font-size: 26px; font-weight: 800; color: var(--gold-deep); font-family: "Frank Ruhl Libre", serif; }
+  .stat-card .lbl { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .stat-card.warn .num { color: var(--warn); }
+  .stat-card.good .num { color: var(--good); }
+
+  .trend-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 18px; margin-bottom: 20px;
+  }
+  .trend-card .ttl { font-size: 13px; font-weight: 700; color: var(--gold-deep); margin-bottom: 12px; }
+  .trend-bars { display: flex; align-items: flex-end; gap: 4px; height: 70px; }
+  .trend-bar { flex: 1; background: linear-gradient(180deg, var(--gold), var(--gold-deep)); border-radius: 4px 4px 0 0; min-height: 2px; position: relative; }
+  .trend-bar-empty { background: var(--cream-2); }
+  .trend-labels { display: flex; gap: 4px; margin-top: 6px; }
+  .trend-labels span { flex: 1; text-align: center; font-size: 9.5px; color: var(--muted); }
+
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+  .search-box { flex: 1; min-width: 180px; }
+  .search-box input {
+    width: 100%; padding: 10px 14px; border-radius: 10px; border: 1.5px solid var(--border);
+    font-size: 13.5px; font-family: inherit;
+  }
+  .search-box input:focus { outline: none; border-color: var(--gold); }
+  .chip { padding: 8px 14px; border-radius: 999px; border: 1.5px solid var(--border); background: #fff; font-size: 12.5px; font-weight: 700; color: var(--muted); cursor: pointer; font-family: inherit; }
+  .chip.active { background: var(--gold-deep); color: #fff; border-color: var(--gold-deep); }
+
+  .table-wrap { background: var(--card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .row {
+    display: grid; grid-template-columns: 90px 1fr 120px 1fr 90px 34px;
+    gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); align-items: center;
+    font-size: 13px; cursor: pointer;
+  }
+  .row:last-child { border-bottom: none; }
+  .row:hover { background: var(--cream); }
+  .row.head { font-weight: 800; color: var(--muted); font-size: 11.5px; cursor: default; background: var(--cream-2); }
+  .row.head:hover { background: var(--cream-2); }
+  .cell-name { font-weight: 700; }
+  .cell-muted { color: var(--muted); font-size: 12px; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge.done { background: #E3EEE7; color: var(--good); }
+  .badge.partial { background: #F6E4DA; color: var(--warn); }
+  .role-badge { background: var(--cream-2); color: var(--gold-deep); }
+  .expand-toggle { text-align: center; color: var(--muted); font-size: 16px; }
+  .detail {
+    display: none; padding: 14px 20px 18px; background: var(--cream); border-bottom: 1px solid var(--border);
+    font-size: 12.5px; color: var(--muted);
+  }
+  .detail.open { display: block; }
+  .detail b { color: var(--text); }
+  .empty-state, .load-state, .err-state { padding: 50px 20px; text-align: center; color: var(--muted); font-size: 13.5px; }
+  .err-state { color: var(--warn); }
+
+  @media (max-width: 640px) {
+    .row { grid-template-columns: 1fr 1fr 34px; grid-template-areas: "a b x" "c c c"; }
+    .row.head { display: none; }
+    .row > *:nth-child(1) { grid-area: a; }
+    .row > *:nth-child(2) { grid-area: b; }
+    .row > *:nth-child(3), .row > *:nth-child(4), .row > *:nth-child(5) { display: none; }
+    .row > *:nth-child(6) { grid-area: x; }
+  }
+</style>
+</head><body>
+
+<div id="gate">
+  <div class="gate-card">
+    <h1>דשבורד - אבחון עסקי</h1>
+    <p>אזור פרטי. הזן סיסמה כדי להיכנס.</p>
+    <input type="password" id="pwInput" placeholder="סיסמה" autocomplete="off">
+    <button class="btn btn-primary" id="pwSubmit">כניסה</button>
+    <div class="gate-err" id="gateErr"></div>
+  </div>
+</div>
+
+<div id="dash">
+  <div class="wrap">
+    <div class="dash-head">
+      <div>
+        <h1>דשבורד האבחון העסקי</h1>
+        <div class="sub" id="lastUpdated"></div>
+      </div>
+      <div class="head-actions">
+        <button class="icon-btn" id="refreshBtn">רענן</button>
+        <button class="icon-btn" id="exportBtn">ייצוא ל-CSV</button>
+        <button class="icon-btn" id="logoutBtn">יציאה</button>
+      </div>
+    </div>
+
+    <div id="loadState" class="load-state">טוען נתונים...</div>
+    <div id="errState" class="err-state" style="display:none;"></div>
+
+    <div id="content" style="display:none;">
+      <div class="stats-row">
+        <div class="stat-card"><div class="num" id="statVisits">0</div><div class="lbl">כניסות לקישור</div></div>
+        <div class="stat-card"><div class="num" id="statStarts">0</div><div class="lbl">התחילו למלא</div></div>
+        <div class="stat-card good"><div class="num" id="statFinishes">0</div><div class="lbl">סיימו את האבחון</div></div>
+        <div class="stat-card warn"><div class="num" id="statDropoff">0</div><div class="lbl">התחילו ולא סיימו</div></div>
+        <div class="stat-card"><div class="num" id="statRate">0%</div><div class="lbl">אחוז השלמה</div></div>
+      </div>
+
+      <div class="trend-card">
+        <div class="ttl">מגמת סיומים - 14 הימים האחרונים</div>
+        <div class="trend-bars" id="trendBars"></div>
+        <div class="trend-labels" id="trendLabels"></div>
+      </div>
+
+      <div class="controls">
+        <div class="search-box"><input type="text" id="searchInput" placeholder="חיפוש לפי שם או טלפון..."></div>
+        <button class="chip active" data-range="all">הכל</button>
+        <button class="chip" data-range="7">7 ימים אחרונים</button>
+        <button class="chip" data-range="30">30 יום אחרונים</button>
+        <button class="chip" data-range="today">היום</button>
+      </div>
+
+      <div class="table-wrap">
+        <div class="row head">
+          <span>סטטוס</span><span>שם</span><span>טלפון</span><span>מייל</span><span>תאריך</span><span></span>
+        </div>
+        <div id="tableBody"></div>
+        <div id="emptyState" class="empty-state" style="display:none;">לא נמצאו תוצאות</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ---------------------------------------------------------------------
+  // Fill in after deploying the Google Apps Script bridge (see setup doc).
+  // ---------------------------------------------------------------------
+  // Fill in after deploying the Google Apps Script bridge (see setup doc).
+  const API_URL = "";
+  const ROLE_LABEL = { yazam: "יזם", artist: "אמן", manager: "מנהל" };
+
+  // No password or access token is stored in this page. The password you
+  // type is hashed in the browser and checked live against the real hash
+  // kept privately inside your Apps Script (never shipped to visitors) -
+  // only a correct password gets real data back from the server.
+  let authToken = sessionStorage.getItem("dashToken") || "";
+
+  async function sha256Hex(text) {
+    const enc = new TextEncoder().encode(text);
+    const buf = await crypto.subtle.digest("SHA-256", enc);
+    return Array.from(new Uint8Array(buf)).map(function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+  }
+
+  const gate = document.getElementById("gate");
+  const dash = document.getElementById("dash");
+  const pwInput = document.getElementById("pwInput");
+  const pwSubmit = document.getElementById("pwSubmit");
+  const gateErr = document.getElementById("gateErr");
+
+  function showDash() {
+    gate.style.display = "none";
+    dash.style.display = "block";
+  }
+
+  function showGate(message) {
+    sessionStorage.removeItem("dashToken");
+    authToken = "";
+    gate.style.display = "flex";
+    dash.style.display = "none";
+    gateErr.textContent = message || "";
+  }
+
+  async function tryLogin() {
+    const hash = await sha256Hex(pwInput.value);
+    gateErr.textContent = "בודק...";
+    const ok = await loadData(hash);
+    if (ok) {
+      authToken = hash;
+      sessionStorage.setItem("dashToken", hash);
+      gateErr.textContent = "";
+      showDash();
+    } else {
+      gateErr.textContent = "סיסמה שגויה";
+    }
+  }
+  pwSubmit.addEventListener("click", tryLogin);
+  pwInput.addEventListener("keydown", function (e) { if (e.key === "Enter") tryLogin(); });
+
+  document.getElementById("logoutBtn").addEventListener("click", function () {
+    showGate("");
+  });
+
+  let allSessions = [];
+  let activeRange = "all";
+  let searchTerm = "";
+
+  // Returns true/false. On success also renders the dashboard.
+  async function loadData(tokenOverride) {
+    const token = tokenOverride || authToken;
+    document.getElementById("loadState").style.display = "block";
+    document.getElementById("errState").style.display = "none";
+    document.getElementById("content").style.display = "none";
+
+    if (!API_URL) {
+      document.getElementById("loadState").style.display = "none";
+      document.getElementById("errState").style.display = "block";
+      document.getElementById("errState").textContent = "החיבור לגיליון עדיין לא הוגדר (API_URL ריק).";
+      return false;
+    }
+
+    try {
+      const res = await fetch(API_URL + "?action=list&token=" + encodeURIComponent(token));
+      const data = await res.json();
+      if (!data.ok) {
+        if (tokenOverride) return false; // wrong password during login - let tryLogin report it
+        showGate("הפג תוקף - יש להתחבר שוב");
+        return false;
+      }
+      allSessions = groupBySession(data.rows || []);
+      document.getElementById("loadState").style.display = "none";
+      document.getElementById("content").style.display = "block";
+      document.getElementById("lastUpdated").textContent = "עודכן: " + new Date().toLocaleString("he-IL");
+      render();
+      return true;
+    } catch (err) {
+      document.getElementById("loadState").style.display = "none";
+      document.getElementById("errState").style.display = "block";
+      document.getElementById("errState").textContent = "שגיאה בטעינת הנתונים: " + err.message;
+      return false;
+    }
+  }
+
+  if (authToken) {
+    showDash();
+    loadData();
+  }
+
+  function groupBySession(rows) {
+    const bySession = {};
+    rows.forEach(function (r) {
+      const sid = r.sessionId || ("noid-" + r.Timestamp);
+      if (!bySession[sid]) bySession[sid] = { sessionId: sid, visit: false, start: false, finish: false };
+      const s = bySession[sid];
+      const ts = r.Timestamp ? new Date(r.Timestamp) : null;
+      if (r.event === "visit") { s.visit = true; if (!s.visitAt || ts > s.visitAt) s.visitAt = ts; }
+      if (r.event === "start") {
+        s.start = true;
+        s.name = r.name || s.name; s.phone = r.phone || s.phone; s.email = r.email || s.email;
+        if (!s.startAt || ts > s.startAt) s.startAt = ts;
+      }
+      if (r.event === "finish") {
+        s.finish = true;
+        s.name = r.name || s.name; s.phone = r.phone || s.phone; s.email = r.email || s.email;
+        s.leadRole = r.leadRole || s.leadRole;
+        s.scoreYazam = r.scoreYazam; s.scoreArtist = r.scoreArtist; s.scoreManager = r.scoreManager;
+        if (!s.finishAt || ts > s.finishAt) s.finishAt = ts;
+      }
+    });
+    return Object.values(bySession).sort(function (a, b) {
+      const ad = a.finishAt || a.startAt || a.visitAt || 0;
+      const bd = b.finishAt || b.startAt || b.visitAt || 0;
+      return bd - ad;
+    });
+  }
+
+  function inRange(date) {
+    if (!date) return false;
+    if (activeRange === "all") return true;
+    const now = new Date();
+    if (activeRange === "today") {
+      return date.toDateString() === now.toDateString();
+    }
+    const days = parseInt(activeRange, 10);
+    const cutoff = new Date(now.getTime() - days * 86400000);
+    return date >= cutoff;
+  }
+
+  function render() {
+    const visits = allSessions.filter(function (s) { return s.visit; }).length;
+    const starts = allSessions.filter(function (s) { return s.start; }).length;
+    const finishes = allSessions.filter(function (s) { return s.finish; }).length;
+    const dropoff = allSessions.filter(function (s) { return s.start && !s.finish; }).length;
+    const rate = starts ? Math.round((finishes / starts) * 100) : 0;
+
+    document.getElementById("statVisits").textContent = visits;
+    document.getElementById("statStarts").textContent = starts;
+    document.getElementById("statFinishes").textContent = finishes;
+    document.getElementById("statDropoff").textContent = dropoff;
+    document.getElementById("statRate").textContent = rate + "%";
+
+    renderTrend();
+    renderTable();
+  }
+
+  function renderTrend() {
+    const days = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() - i);
+      days.push({ date: d, count: 0 });
+    }
+    allSessions.forEach(function (s) {
+      if (!s.finish || !s.finishAt) return;
+      const d = new Date(s.finishAt);
+      d.setHours(0, 0, 0, 0);
+      const match = days.find(function (day) { return day.date.getTime() === d.getTime(); });
+      if (match) match.count++;
+    });
+    const max = Math.max.apply(null, days.map(function (d) { return d.count; }).concat([1]));
+    const barsEl = document.getElementById("trendBars");
+    const labelsEl = document.getElementById("trendLabels");
+    barsEl.innerHTML = days.map(function (d) {
+      const h = Math.max(2, Math.round((d.count / max) * 66));
+      const cls = d.count === 0 ? "trend-bar trend-bar-empty" : "trend-bar";
+      return '<div class="' + cls + '" style="height:' + h + 'px" title="' + d.date.toLocaleDateString("he-IL") + ': ' + d.count + '"></div>';
+    }).join("");
+    labelsEl.innerHTML = days.map(function (d, i) {
+      return '<span>' + (i % 2 === 0 ? d.date.getDate() + "/" + (d.date.getMonth() + 1) : "") + '</span>';
+    }).join("");
+  }
+
+  function renderTable() {
+    const term = searchTerm.trim();
+    const filtered = allSessions.filter(function (s) {
+      if (!(s.start || s.finish)) return false;
+      const dateRef = s.finishAt || s.startAt;
+      if (!inRange(dateRef)) return false;
+      if (term) {
+        const hay = ((s.name || "") + " " + (s.phone || "")).toLowerCase();
+        if (hay.indexOf(term.toLowerCase()) === -1) return false;
+      }
+      return true;
+    });
+
+    const body = document.getElementById("tableBody");
+    const emptyState = document.getElementById("emptyState");
+    if (!filtered.length) {
+      body.innerHTML = "";
+      emptyState.style.display = "block";
+      return;
+    }
+    emptyState.style.display = "none";
+
+    body.innerHTML = filtered.map(function (s, idx) {
+      const dateRef = s.finishAt || s.startAt;
+      const dateStr = dateRef ? new Date(dateRef).toLocaleString("he-IL", { dateStyle: "short", timeStyle: "short" }) : "";
+      const statusBadge = s.finish
+        ? '<span class="badge done">הושלם</span>'
+        : '<span class="badge partial">לא סיים</span>';
+      const roleBadge = s.finish && s.leadRole
+        ? '<span class="badge role-badge">' + (ROLE_LABEL[s.leadRole] || s.leadRole) + '</span>' : "";
+
+      let detailHtml = "";
+      if (s.finish) {
+        detailHtml =
+          '<b>פירוט ציונים:</b> יזם ' + (s.scoreYazam || 0) + ' | אמן ' + (s.scoreArtist || 0) + ' | מנהל ' + (s.scoreManager || 0) + '<br>' +
+          '<b>פרופיל מוביל:</b> ' + (ROLE_LABEL[s.leadRole] || s.leadRole || '-');
+      } else {
+        detailHtml = 'המשתתף מילא את הפרטים אך לא השלים את השאלון.';
+      }
+
+      return (
+        '<div class="row" data-idx="' + idx + '">' +
+          '<span>' + statusBadge + '</span>' +
+          '<span class="cell-name">' + escapeHtml(s.name || '-') + '</span>' +
+          '<span class="cell-muted">' + escapeHtml(s.phone || '-') + '</span>' +
+          '<span class="cell-muted">' + escapeHtml(s.email || '-') + '</span>' +
+          '<span class="cell-muted">' + dateStr + roleBadge + '</span>' +
+          '<span class="expand-toggle">&#9662;</span>' +
+        '</div>' +
+        '<div class="detail" id="detail-' + idx + '">' + detailHtml + '</div>'
+      );
+    }).join("");
+
+    Array.prototype.forEach.call(body.querySelectorAll(".row"), function (rowEl) {
+      rowEl.addEventListener("click", function () {
+        const idx = rowEl.getAttribute("data-idx");
+        document.getElementById("detail-" + idx).classList.toggle("open");
+      });
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  document.getElementById("searchInput").addEventListener("input", function (e) {
+    searchTerm = e.target.value;
+    renderTable();
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll(".chip"), function (chip) {
+    chip.addEventListener("click", function () {
+      Array.prototype.forEach.call(document.querySelectorAll(".chip"), function (c) { c.classList.remove("active"); });
+      chip.classList.add("active");
+      activeRange = chip.getAttribute("data-range");
+      renderTable();
+    });
+  });
+
+  document.getElementById("refreshBtn").addEventListener("click", function () { loadData(); });
+
+  document.getElementById("exportBtn").addEventListener("click", function () {
+    const rows = [["סטטוס", "שם", "טלפון", "מייל", "תאריך", "פרופיל מוביל"]];
+    allSessions.forEach(function (s) {
+      if (!(s.start || s.finish)) return;
+      const dateRef = s.finishAt || s.startAt;
+      if (!inRange(dateRef)) return;
+      rows.push([
+        s.finish ? "הושלם" : "לא סיים",
+        s.name || "", s.phone || "", s.email || "",
+        dateRef ? new Date(dateRef).toLocaleString("he-IL") : "",
+        s.finish ? (ROLE_LABEL[s.leadRole] || s.leadRole || "") : ""
+      ]);
+    });
+    const csv = "﻿" + rows.map(function (r) {
+      return r.map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(",");
+    }).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "משתתפי-האבחון-" + new Date().toISOString().slice(0, 10) + ".csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+})();
+</script>
+</body></html>
