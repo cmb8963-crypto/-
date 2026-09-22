@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>האזור האישי</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2396723F'/%3E%3Ctext x='16' y='22' font-size='17' text-anchor='middle' fill='white' font-family='serif'%3Eב%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@500;700;900&family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../shared/theme.css">
+<link rel="stylesheet" href="portal.css">
+</head>
+<body>
+<noscript>יש להפעיל JavaScript כדי להיכנס לאזור האישי.</noscript>
+
+<section id="auth" class="gate" hidden>
+  <div class="gate-card">
+    <div class="logo-mark">ב</div>
+    <h1 id="authTitle">האזור האישי</h1>
+    <p id="authSub">כניסה עם כתובת המייל והסיסמה שלך</p>
+
+    <form id="loginForm">
+      <div class="field"><label for="email">אימייל</label><input id="email" type="email" autocomplete="username" required class="ltr"></div>
+      <div class="field"><label for="password">סיסמה</label><input id="password" type="password" autocomplete="current-password" required></div>
+      <button class="btn btn-primary btn-block" type="submit">כניסה</button>
+      <button class="btn btn-ghost btn-block" type="button" id="toForgot" style="margin-top:6px">שכחתי סיסמה</button>
+    </form>
+
+    <form id="forgotForm" hidden>
+      <div class="field"><label for="femail">אימייל</label><input id="femail" type="email" autocomplete="email" required class="ltr"></div>
+      <button class="btn btn-primary btn-block" type="submit">שליחת קישור לבחירת סיסמה</button>
+      <button class="btn btn-ghost btn-block" type="button" id="toLogin" style="margin-top:6px">חזרה לכניסה</button>
+    </form>
+
+    <form id="setForm" hidden>
+      <div class="field"><label for="npw">סיסמה חדשה (8 תווים לפחות, אותיות וספרות)</label><input id="npw" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="npw2">אימות סיסמה</label><input id="npw2" type="password" autocomplete="new-password" required></div>
+      <button class="btn btn-primary btn-block" type="submit">שמירה וכניסה</button>
+    </form>
+
+    <div class="gate-err" id="authErr" role="alert"></div>
+    <div class="small muted" id="authNote" style="margin-top:12px"></div>
+  </div>
+</section>
+
+<div id="portal" hidden>
+  <header class="p-head"><div class="p-head-in">
+    <div class="p-brand"><span class="logo-mark sm">ב</span><span id="coachName"></span></div>
+    <button class="btn btn-ghost btn-sm" id="logoutBtn">יציאה</button>
+  </div></header>
+  <main class="p-main" id="pmain"></main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="../shared/config.js"></script>
+<script src="../shared/core.js"></script>
+<script src="../shared/email-templates.js"></script>
+<script src="../shared/api.js"></script>
+<script src="../app/ui.js"></script>
+<script src="portal.js"></script>
+</body>
+</html>
