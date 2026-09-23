@@ -577,7 +577,6 @@
         <button class="btn btn-primary" onclick="goToScreen('screen-cta')">אני רוצה לשמוע עוד</button>
       </div>
       <div class="email-status" id="pdfStatus"></div>
-      <div class="email-status" id="emailStatus"></div>
     </div>
   </div>
 </section>
@@ -624,28 +623,11 @@
 <!-- PDF generation deps -->
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-<!-- Email sending (client-side) -->
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4.3.3/dist/email.min.js"></script>
-
 <script>
 (function () {
-  // ---------------------------------------------------------------------
-  // EmailJS config - fill these in once the free EmailJS account is ready.
-  // Until then, automatic email sending is skipped silently (PDF download
-  // and on-screen results keep working regardless).
-  // Template variables sent: to_name, to_phone, to_email, submitted_at,
-  // scores_summary, lead_role, lead_text, second_role, second_text,
-  // weak_role, weak_text, answers_breakdown
-  // ---------------------------------------------------------------------
-  const EMAILJS_PUBLIC_KEY = "d9Ha8qp4v48CJyFlj";
-  const EMAILJS_SERVICE_ID = "CHAIM";
-  const EMAILJS_TEMPLATE_ID = "template_xg9odyq";
-  const EMAILJS_CONTACT_TEMPLATE_ID = "template_569nwgo";
+  // Results are delivered via the private dashboard (see below), not
+  // email - this avoids the Google sign-in popup some participants hit.
   const RESULTS_EMAIL = "cmb.8963@gmail.com";
-
-  if (EMAILJS_PUBLIC_KEY && window.emailjs) {
-    emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
-  }
 
   // ---------------------------------------------------------------------
   // Quiet analytics for the private dashboard (visit / start / finish).
@@ -926,7 +908,6 @@
         name: registrant.name, phone: registrant.phone, email: registrant.email,
         leadRole: ordered[0], scoreYazam: scores.yazam, scoreArtist: scores.artist, scoreManager: scores.manager,
       });
-      sendResultsEmail();
     }
   }
 
@@ -937,12 +918,6 @@
     }).join("  |  ");
   }
 
-  function answersBreakdownText() {
-    return questions.map(function (q, i) {
-      return (i + 1) + ". " + q.text + " — ציון: " + answers[i];
-    }).join("\n");
-  }
-
   function nowHebrewString() {
     try {
       return new Date().toLocaleString("he-IL", { dateStyle: "medium", timeStyle: "short" });
@@ -951,43 +926,7 @@
     }
   }
 
-  function sendResultsEmail() {
-    // Sends a copy of the participant's results to the business owner via
-    // EmailJS. This works normally on a standard (non-sandboxed) domain.
-    const statusEl = document.getElementById("emailStatus");
-    if (!EMAILJS_PUBLIC_KEY || !EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID || !window.emailjs) {
-      if (statusEl) statusEl.textContent = "";
-      console.info("EmailJS not configured yet - skipping automatic email send.");
-      return;
-    }
-    const params = {
-      to_name: registrant.name,
-      to_phone: registrant.phone,
-      to_email: registrant.email,
-      results_email: RESULTS_EMAIL,
-      submitted_at: nowHebrewString(),
-      scores_summary: scoresSummaryText(),
-      lead_role: ROLE_LABEL[lastResult.ordered[0]],
-      lead_text: lastResult.profile.lead,
-      second_role: ROLE_LABEL[lastResult.ordered[1]],
-      second_text: lastResult.profile.second,
-      weak_role: ROLE_LABEL[lastResult.ordered[2]],
-      weak_text: lastResult.profile.weak,
-      answers_breakdown: answersBreakdownText(),
-    };
-    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, params).then(function () {
-      if (statusEl) statusEl.textContent = "התוצאות נשלחו למייל בהצלחה.";
-    }).catch(function (err) {
-      console.error("EmailJS send failed", err);
-      if (statusEl) statusEl.textContent = "";
-    });
-  }
-
-
   // --- Contact request: full form (name, phone, email, message) ---
-  // Tries EmailJS first (works normally on a standard domain); if it fails
-  // for any reason (quota, misconfigured template, offline, etc.) it falls
-  // back to a mailto: hand-off so the inquiry is never silently lost.
   const contactForm = document.getElementById("contactForm");
   if (contactForm) {
     const cfName = document.getElementById("cfName");
