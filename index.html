@@ -615,7 +615,7 @@
       <div class="name">חיים מאיר ברויער</div>
       <div>מאמן אישי ועסקי</div>
       <div style="margin-top:8px;"><span class="icn">&#9742;</span>טלפון: <a href="tel:+972548528963">054-8528963</a></div>
-      <div><span class="icn">&#9993;</span>מייל: <a href="mailto:cmb.8963@gmail.com?subject=%D7%90%D7%99%D7%9E%D7%95%D7%9F%20%D7%A2%D7%A1%D7%A7%D7%99%20-%20%D7%90%D7%A9%D7%9E%D7%97%20%D7%A9%D7%AA%D7%99%D7%A6%D7%A8%D7%95%20%D7%90%D7%99%D7%AA%D7%99%20%D7%A7%D7%A9%D7%A8">cmb.8963@gmail.com</a></div>
+      <div><span class="icn">&#9993;</span>מייל: <a id="cardMailLink" href="mailto:cmb.8963@gmail.com?subject=%D7%90%D7%99%D7%9E%D7%95%D7%9F%20%D7%A2%D7%A1%D7%A7%D7%99%20-%20%D7%90%D7%A9%D7%9E%D7%97%20%D7%A9%D7%AA%D7%99%D7%A6%D7%A8%D7%95%20%D7%90%D7%99%D7%AA%D7%99%20%D7%A7%D7%A9%D7%A8">cmb.8963@gmail.com</a></div>
     </div>
   </div>
 </section>
@@ -782,8 +782,20 @@
       email: regEmail.value.trim(),
     };
     trackEvent("start", { name: registrant.name, phone: registrant.phone, email: registrant.email });
+    updateCardMailLink();
     startQuiz();
   });
+
+  function updateCardMailLink() {
+    const link = document.getElementById("cardMailLink");
+    if (!link) return;
+    const subject = "אימון עסקי - אשמח שתיצרו איתי קשר";
+    const body =
+      "שלום, מילאתי את האבחון העסקי ואשמח להשאיר פנייה בנוגע לאימון עסקי אישי/עסקי - אשמח שתחזרו אליי.\n\n" +
+      "שם: " + registrant.name + "\n" +
+      "טלפון: " + registrant.phone;
+    link.href = "mailto:cmb.8963@gmail.com?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+  }
 
   // --- Quiz ---
   window.startQuiz = function () {
