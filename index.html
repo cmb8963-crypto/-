@@ -1030,26 +1030,9 @@
         }
       }
 
-      if (!EMAILJS_PUBLIC_KEY || !EMAILJS_SERVICE_ID || !EMAILJS_CONTACT_TEMPLATE_ID || !window.emailjs) {
-        mailtoFallback("");
-        return;
-      }
-
-      const originalText = submitBtn.textContent;
-      submitBtn.disabled = true;
-      submitBtn.textContent = "שולח...";
-      emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_CONTACT_TEMPLATE_ID, params).then(function () {
-        submitBtn.textContent = "הפנייה נשלחה!";
-        if (statusEl) statusEl.textContent = "תודה! הפנייה שלך התקבלה ונחזור אליך בהקדם.";
-        contactForm.reset();
-        setTimeout(function () { submitBtn.disabled = false; submitBtn.textContent = originalText; }, 2500);
-      }).catch(function (err) {
-        console.error("Contact request send failed", err);
-        submitBtn.disabled = false;
-        submitBtn.textContent = originalText;
-        mailtoFallback("השליחה האוטומטית נכשלה.");
-      });
-
+      // Goes straight to mailto: no EmailJS attempt, no Google popup, no
+      // delay - the participant's mail app opens immediately, pre-filled.
+      mailtoFallback("");
     });
   }
 
