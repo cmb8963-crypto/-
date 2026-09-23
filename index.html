@@ -911,13 +911,6 @@
     }
   }
 
-  function scoresSummaryText() {
-    return lastResult.ordered.map(function (role) {
-      const pct = Math.round((lastResult.scores[role] / 50) * 100);
-      return ROLE_LABEL[role] + ": " + pct + "%";
-    }).join("  |  ");
-  }
-
   function nowHebrewString() {
     try {
       return new Date().toLocaleString("he-IL", { dateStyle: "medium", timeStyle: "short" });
@@ -949,8 +942,6 @@
         to_phone: cfPhone.value.trim(),
         to_email: cfEmail.value.trim(),
         message: cfMessage.value.trim(),
-        submitted_at: nowHebrewString(),
-        scores_summary: lastResult ? scoresSummaryText() : "",
       };
 
       function mailtoFallback(reasonText) {
@@ -969,9 +960,42 @@
         }
       }
 
-      // Goes straight to mailto: no EmailJS attempt, no Google popup, no
-      // delay - the participant's mail app opens immediately, pre-filled.
-      mailtoFallback("");
+      // Silent, automatic send via our own Apps Script bridge - no mail
+      // app, no Google popup (already authorized once on the owner's
+      // account, not per-visitor). Falls back to mailto only if this
+      // request genuinely fails (offline, bridge unreachable, etc.).
+      if (!TRACKING_URL) {
+        mailtoFallback("");
+        return;
+      }
+      const originalText = submitBtn.textContent;
+      submitBtn.disabled = true;
+      submitBtn.textContent = "שולח...";
+      fetch(TRACKING_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          token: TRACKING_WRITE_TOKEN,
+          event: "contact",
+          sessionId: sessionId,
+          hostname: location.hostname,
+          name: params.to_name,
+          phone: params.to_phone,
+          email: params.to_email,
+          message: params.message,
+        }),
+      }).then(function (res) { return res.json(); }).then(function (data) {
+        if (!data.ok) throw new Error(data.error || "send failed");
+        submitBtn.textContent = "הפנייה נשלחה!";
+        if (statusEl) statusEl.textContent = "תודה! הפנייה שלך התקבלה ונחזור אליך בהקדם.";
+        contactForm.reset();
+        setTimeout(function () { submitBtn.disabled = false; submitBtn.textContent = originalText; }, 2500);
+      }).catch(function (err) {
+        console.error("Contact request send failed", err);
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+        mailtoFallback("השליחה האוטומטית נכשלה.");
+      });
     });
   }
 
