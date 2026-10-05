@@ -577,7 +577,6 @@
         <button class="btn btn-primary" onclick="goToScreen('screen-cta')">אני רוצה לשמוע עוד</button>
       </div>
       <div class="email-status" id="pdfStatus"></div>
-      <div class="email-status" id="emailStatus"></div>
     </div>
   </div>
 </section>
@@ -616,7 +615,7 @@
       <div class="name">חיים מאיר ברויער</div>
       <div>מאמן אישי ועסקי</div>
       <div style="margin-top:8px;"><span class="icn">&#9742;</span>טלפון: <a href="tel:+972548528963">054-8528963</a></div>
-      <div><span class="icn">&#9993;</span>מייל: <a href="mailto:cmb.8963@gmail.com?subject=%D7%90%D7%99%D7%9E%D7%95%D7%9F%20%D7%A2%D7%A1%D7%A7%D7%99%20-%20%D7%90%D7%A9%D7%9E%D7%97%20%D7%A9%D7%AA%D7%99%D7%A6%D7%A8%D7%95%20%D7%90%D7%99%D7%AA%D7%99%20%D7%A7%D7%A9%D7%A8">cmb.8963@gmail.com</a></div>
+      <div><span class="icn">&#9993;</span>מייל: <a id="cardMailLink" href="mailto:cmb.8963@gmail.com?subject=%D7%90%D7%99%D7%9E%D7%95%D7%9F%20%D7%A2%D7%A1%D7%A7%D7%99%20-%20%D7%90%D7%A9%D7%9E%D7%97%20%D7%A9%D7%AA%D7%99%D7%A6%D7%A8%D7%95%20%D7%90%D7%99%D7%AA%D7%99%20%D7%A7%D7%A9%D7%A8">cmb.8963@gmail.com</a></div>
     </div>
   </div>
 </section>
@@ -624,28 +623,11 @@
 <!-- PDF generation deps -->
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js"></script>
-<!-- Email sending (client-side) -->
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4.3.3/dist/email.min.js"></script>
-
 <script>
 (function () {
-  // ---------------------------------------------------------------------
-  // EmailJS config - fill these in once the free EmailJS account is ready.
-  // Until then, automatic email sending is skipped silently (PDF download
-  // and on-screen results keep working regardless).
-  // Template variables sent: to_name, to_phone, to_email, submitted_at,
-  // scores_summary, lead_role, lead_text, second_role, second_text,
-  // weak_role, weak_text, answers_breakdown
-  // ---------------------------------------------------------------------
-  const EMAILJS_PUBLIC_KEY = "d9Ha8qp4v48CJyFlj";
-  const EMAILJS_SERVICE_ID = "CHAIM";
-  const EMAILJS_TEMPLATE_ID = "template_xg9odyq";
-  const EMAILJS_CONTACT_TEMPLATE_ID = "template_569nwgo";
+  // Results are delivered via the private dashboard (see below), not
+  // email - this avoids the Google sign-in popup some participants hit.
   const RESULTS_EMAIL = "cmb.8963@gmail.com";
-
-  if (EMAILJS_PUBLIC_KEY && window.emailjs) {
-    emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
-  }
 
   // ---------------------------------------------------------------------
   // Quiet analytics for the private dashboard (visit / start / finish).
@@ -800,8 +782,20 @@
       email: regEmail.value.trim(),
     };
     trackEvent("start", { name: registrant.name, phone: registrant.phone, email: registrant.email });
+    updateCardMailLink();
     startQuiz();
   });
+
+  function updateCardMailLink() {
+    const link = document.getElementById("cardMailLink");
+    if (!link) return;
+    const subject = "אימון עסקי - אשמח שתיצרו איתי קשר";
+    const body =
+      "שלום, מילאתי את האבחון העסקי ואשמח להשאיר פנייה בנוגע לאימון עסקי אישי/עסקי - אשמח שתחזרו אליי.\n\n" +
+      "שם: " + registrant.name + "\n" +
+      "טלפון: " + registrant.phone;
+    link.href = "mailto:cmb.8963@gmail.com?subject=" + encodeURIComponent(subject) + "&body=" + encodeURIComponent(body);
+  }
 
   // --- Quiz ---
   window.startQuiz = function () {
@@ -926,21 +920,7 @@
         name: registrant.name, phone: registrant.phone, email: registrant.email,
         leadRole: ordered[0], scoreYazam: scores.yazam, scoreArtist: scores.artist, scoreManager: scores.manager,
       });
-      sendResultsEmail();
     }
-  }
-
-  function scoresSummaryText() {
-    return lastResult.ordered.map(function (role) {
-      const pct = Math.round((lastResult.scores[role] / 50) * 100);
-      return ROLE_LABEL[role] + ": " + pct + "%";
-    }).join("  |  ");
-  }
-
-  function answersBreakdownText() {
-    return questions.map(function (q, i) {
-      return (i + 1) + ". " + q.text + " — ציון: " + answers[i];
-    }).join("\n");
   }
 
   function nowHebrewString() {
@@ -951,43 +931,7 @@
     }
   }
 
-  function sendResultsEmail() {
-    // Sends a copy of the participant's results to the business owner via
-    // EmailJS. This works normally on a standard (non-sandboxed) domain.
-    const statusEl = document.getElementById("emailStatus");
-    if (!EMAILJS_PUBLIC_KEY || !EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID || !window.emailjs) {
-      if (statusEl) statusEl.textContent = "";
-      console.info("EmailJS not configured yet - skipping automatic email send.");
-      return;
-    }
-    const params = {
-      to_name: registrant.name,
-      to_phone: registrant.phone,
-      to_email: registrant.email,
-      results_email: RESULTS_EMAIL,
-      submitted_at: nowHebrewString(),
-      scores_summary: scoresSummaryText(),
-      lead_role: ROLE_LABEL[lastResult.ordered[0]],
-      lead_text: lastResult.profile.lead,
-      second_role: ROLE_LABEL[lastResult.ordered[1]],
-      second_text: lastResult.profile.second,
-      weak_role: ROLE_LABEL[lastResult.ordered[2]],
-      weak_text: lastResult.profile.weak,
-      answers_breakdown: answersBreakdownText(),
-    };
-    emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, params).then(function () {
-      if (statusEl) statusEl.textContent = "התוצאות נשלחו למייל בהצלחה.";
-    }).catch(function (err) {
-      console.error("EmailJS send failed", err);
-      if (statusEl) statusEl.textContent = "";
-    });
-  }
-
-
   // --- Contact request: full form (name, phone, email, message) ---
-  // Tries EmailJS first (works normally on a standard domain); if it fails
-  // for any reason (quota, misconfigured template, offline, etc.) it falls
-  // back to a mailto: hand-off so the inquiry is never silently lost.
   const contactForm = document.getElementById("contactForm");
   if (contactForm) {
     const cfName = document.getElementById("cfName");
@@ -1010,8 +954,6 @@
         to_phone: cfPhone.value.trim(),
         to_email: cfEmail.value.trim(),
         message: cfMessage.value.trim(),
-        submitted_at: nowHebrewString(),
-        scores_summary: lastResult ? scoresSummaryText() : "",
       };
 
       function mailtoFallback(reasonText) {
@@ -1030,15 +972,32 @@
         }
       }
 
-      if (!EMAILJS_PUBLIC_KEY || !EMAILJS_SERVICE_ID || !EMAILJS_CONTACT_TEMPLATE_ID || !window.emailjs) {
+      // Silent, automatic send via our own Apps Script bridge - no mail
+      // app, no Google popup (already authorized once on the owner's
+      // account, not per-visitor). Falls back to mailto only if this
+      // request genuinely fails (offline, bridge unreachable, etc.).
+      if (!TRACKING_URL) {
         mailtoFallback("");
         return;
       }
-
       const originalText = submitBtn.textContent;
       submitBtn.disabled = true;
       submitBtn.textContent = "שולח...";
-      emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_CONTACT_TEMPLATE_ID, params).then(function () {
+      fetch(TRACKING_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          token: TRACKING_WRITE_TOKEN,
+          event: "contact",
+          sessionId: sessionId,
+          hostname: location.hostname,
+          name: params.to_name,
+          phone: params.to_phone,
+          email: params.to_email,
+          message: params.message,
+        }),
+      }).then(function (res) { return res.json(); }).then(function (data) {
+        if (!data.ok) throw new Error(data.error || "send failed");
         submitBtn.textContent = "הפנייה נשלחה!";
         if (statusEl) statusEl.textContent = "תודה! הפנייה שלך התקבלה ונחזור אליך בהקדם.";
         contactForm.reset();
@@ -1049,7 +1008,6 @@
         submitBtn.textContent = originalText;
         mailtoFallback("השליחה האוטומטית נכשלה.");
       });
-
     });
   }
 
@@ -1128,7 +1086,6 @@
       pdfPersonalHtml() +
 
       '<div style="margin:26px 0 0; padding:16px 20px; border-radius:12px; background:#F3EBDC; border-right:3px solid #B8935A;">' +
-        '<div style="font-size:24px; line-height:0.6; color:#B8935A; font-family:Georgia, serif; margin-bottom:6px;">&#8220;</div>' +
         '<div style="font-size:13px; line-height:1.75; font-style:italic; color:#4A3F32;">אני מאמין באמונה שלמה שהקדוש ברוך הוא הטמיע בנו את הכוחות להצליח. תפקידנו הוא להאמין בכוחות הללו, לדעת לנווט אותם נכון - ולא לעצור את עצמנו.</div>' +
       '</div>';
 
