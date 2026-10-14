@@ -1,15 +1,14 @@
 /*
- * core.js - all business logic of "משכנותיך": labels, dates, validation,
- * case/task operations and the task-chaining rules.
+ * core.js - all business rules of "משכנותיך": labels, dates, validation and
+ * every write operation (tasks, cases, case updates, documents).
  *
  * Pure functions only: no DOM, no network, no storage. The same file runs in
  * the browser (demo mode), in Google Apps Script (copied by build.sh) and in
  * the Vitest tests, so the rules are enforced identically everywhere.
  *
- * Every write goes through MK.run(action, db, req, ctx). It never mutates the
- * db it receives: it returns { ok, changes: { table: [rows...] } } and the
- * caller persists all the changes together. Before returning, it re-checks the
- * chain invariant on the resulting data, so a bad change is never written.
+ * Every write goes through MK.run(op, db, input, ctx). It never mutates the db
+ * it receives: it returns { ok, changes: { table: [rows] }, removed: { table: [ids] } }
+ * and the caller persists all of it together.
  *
  * Contains NO real data.
  */
@@ -21,45 +20,19 @@
   "use strict";
 
   // ================================================================ labels
-  var CASE_STATUS = { ACTIVE: "פעיל", WAITING: "בהמתנה", CLOSED: "סגור" };
-  var OPEN_STATUSES = { ACTIVE: true, WAITING: true };
-
-  var DEPARTMENTS = {
-    STRATEGY: "אסטרטגיה",
-    BOARD: "דירקטוריון ובעלים",
-    CEO: "מנכ\"ל",
-    PRODUCT: "מוצר",
-    FINANCE: "כספים",
-    MARKETING_SALES: "שיווק ומכירות",
-    ADMIN_LOGISTICS: "אדמיניסטרציה ולוגיסטיקה",
-    BUSINESS_DEV: "פיתוח עסקי",
-    GROOM_INSTRUCTORS: "מדריכי חתנים"
+  var KINDS = {
+    mine:   { label: "שלי",             short: "שלי",             icon: "user" },
+    people: { label: "מעקב אחרי אנשים", short: "מעקב אחרי מישהו", icon: "eye" },
+    "case": { label: "מעקב תיקים",      short: "משימה בתיק",      icon: "folder" },
+    org:    { label: "ניהול ארגוני",     short: "ניהול ארגוני",     icon: "briefcase" }
   };
-
+  var KIND_ORDER = ["mine", "people", "case", "org"];
+  var CASE_STATUS = { open: "פתוח", waiting: "בהמתנה", closed: "סגור" };
+  var CASE_STATUS_ORDER = ["open", "waiting", "closed"];
+  var DEPTS = ["אסטרטגיה", "דירקטוריון ובעלים", "מנכ\"ל", "מוצר", "כספים", "שיווק ומכירות", "אדמיניסטרציה ולוגיסטיקה", "פיתוח עסקי", "מדריכי חתנים"];
   var ROLES = { ADMIN: "מנהל מערכת", STAFF: "צוות", INSTRUCTOR: "מדריך" };
-
-  var DEFAULT_TAGS = [
-    "ליווי ומעקב תיקים",
-    "ניהול תיקים מורכבים",
-    "מתווה לבית בפנים",
-    "קשר עם מטפלים",
-    "שאלות לקודש",
-    "שאלות הלכתיות לרבנים",
-    "פוריות",
-    "קביעת תורים לגורמי מקצוע"
-  ];
-
-  var TABLES = ["users", "cases", "tags", "contacts", "tasks"];
-
-  var MSG = {
-    required: function (f) { return "יש למלא " + f; },
-    badDate: function (f) { return f + ": תאריך לא תקין"; },
-    pastDate: function (f) { return f + " לא יכול להיות בעבר"; },
-    notFound: "הרשומה לא נמצאה. ייתכן שנמחקה או שהנתונים לא מעודכנים - נסו לרענן.",
-    taskDone: "המשימה כבר סומנה כבוצעה",
-    caseClosed: "התיק סגור",
-    tooLong: function (f, n) { return f + " ארוך מדי (עד " + n + " תווים)"; }
-  };
+  var TABLES = ["users", "cases", "tasks", "logs", "documents"];
+  var MAX_UPLOAD_MB = 25;
 
   // ================================================================ small utils
   function bool(v) { return v === true || v === "true" || v === "TRUE" || v === 1 || v === "1"; }
@@ -70,545 +43,15 @@
     for (var i = 0; i < (list || []).length; i++) if (list[i].id === id) return list[i];
     return null;
   }
-  function uid(prefix) {
-    return (prefix || "id") + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
-  }
+  function uid(prefix) { return (prefix || "id") + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); }
   function copy(o) { var r = {}; Object.keys(o || {}).forEach(function (k) { r[k] = o[k]; }); return r; }
-  function splitIds(v) {
-    if (Array.isArray(v)) return v.filter(Boolean).map(String);
-    return str(v) ? str(v).split(",").map(function (s) { return s.trim(); }).filter(Boolean) : [];
-  }
   function escapeHtml(s) {
-    return String(s === null || s === undefined ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    return String(s === null || s === undefined ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
   }
   function normEmail(e) { return str(e).toLowerCase(); }
   function isEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str(e)); }
-
-  // ================================================================ dates
-  // Calendar days are "yyyy-MM-dd" strings. "Today" is always Israel time.
-  var TZ = "Asia/Jerusalem";
-  function pad(n) { return (n < 10 ? "0" : "") + n; }
-  function isYmd(s) {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(str(s))) return false;
-    var p = s.split("-").map(Number);
-    var d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
-    return d.getUTCFullYear() === p[0] && d.getUTCMonth() === p[1] - 1 && d.getUTCDate() === p[2];
-  }
-  /** The calendar day in Jerusalem for a given instant (default: now). */
-  function todayYmd(now) {
-    var d = now ? new Date(now) : new Date();
-    var parts = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
-    var o = {};
-    parts.forEach(function (p) { o[p.type] = p.value; });
-    return o.year + "-" + o.month + "-" + o.day;
-  }
-  /** Hour of day (0-23) in Jerusalem. */
-  function hourIL(now) {
-    var h = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", hourCycle: "h23" }).format(now ? new Date(now) : new Date());
-    return Number(h) || 0;
-  }
-  function ymdToUtc(ymd) { var p = ymd.split("-").map(Number); return Date.UTC(p[0], p[1] - 1, p[2]); }
-  function addDays(ymd, n) {
-    var d = new Date(ymdToUtc(ymd) + n * 86400000);
-    return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
-  }
-  function diffDays(a, b) { return Math.round((ymdToUtc(b) - ymdToUtc(a)) / 86400000); } // b - a
-  function fmtDate(ymd) {
-    ymd = str(ymd).slice(0, 10);
-    if (!isYmd(ymd)) return "";
-    var p = ymd.split("-");
-    return p[2] + "/" + p[1] + "/" + p[0];
-  }
-  function fmtDateTime(iso) {
-    if (!iso) return "";
-    var d = new Date(iso);
-    if (isNaN(d.getTime())) return fmtDate(iso);
-    var t = new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
-    return fmtDate(todayYmd(d)) + " " + t;
-  }
-  var WEEKDAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
-  function weekday(ymd) { return WEEKDAYS[new Date(ymdToUtc(ymd)).getUTCDay()]; }
-  /** Short relative label: "היום", "מחר", "לפני 3 ימים", "בעוד 5 ימים". */
-  function relDay(ymd, today) {
-    var n = diffDays(today, ymd);
-    if (n === 0) return "היום";
-    if (n === 1) return "מחר";
-    if (n === -1) return "אתמול";
-    if (n === 2) return "מחרתיים";
-    if (n < 0) return "לפני " + (-n) + " ימים";
-    return "בעוד " + n + " ימים";
-  }
-  /** Quick picks for the next task's due date. */
-  function quickDates(today) {
-    return [
-      { key: "tomorrow", label: "מחר", date: addDays(today, 1) },
-      { key: "3days", label: "עוד 3 ימים", date: addDays(today, 3) },
-      { key: "week", label: "שבוע הבא", date: addDays(today, 7) }
-    ];
-  }
-
-  // ================================================================ queries
-  function caseTasks(db, caseId) {
-    return (db.tasks || []).filter(function (t) { return t.caseId === caseId; });
-  }
-  function openTasksOfCase(db, caseId) {
-    return caseTasks(db, caseId).filter(function (t) { return !bool(t.isDone); });
-  }
-  function openTaskOfCase(db, caseId) { return openTasksOfCase(db, caseId)[0] || null; }
-
-  /** Tasks of a case in chain order (first → last), stray tasks appended by date. */
-  function chainOf(db, caseId) {
-    var list = caseTasks(db, caseId);
-    var byPrev = {}, ids = {};
-    list.forEach(function (t) { ids[t.id] = true; });
-    list.forEach(function (t) { if (t.previousTaskId) byPrev[t.previousTaskId] = t; });
-    var heads = list.filter(function (t) { return !t.previousTaskId || !ids[t.previousTaskId]; });
-    heads.sort(function (a, b) { return str(a.createdAt) < str(b.createdAt) ? -1 : 1; });
-    var out = [], seen = {};
-    heads.forEach(function (h) {
-      var t = h;
-      while (t && !seen[t.id]) { out.push(t); seen[t.id] = true; t = byPrev[t.id]; }
-    });
-    list.forEach(function (t) { if (!seen[t.id]) out.push(t); });
-    return out;
-  }
-  function lastTaskOfCase(db, caseId) {
-    var c = chainOf(db, caseId);
-    return c.length ? c[c.length - 1] : null;
-  }
-
-  /** Every place where the chain rule is broken. Empty array = all good. */
-  function checkInvariant(db, onlyCaseId) {
-    var problems = [];
-    (db.cases || []).forEach(function (c) {
-      if (onlyCaseId && c.id !== onlyCaseId) return;
-      var open = openTasksOfCase(db, c.id).length;
-      if (OPEN_STATUSES[c.status] && open !== 1) problems.push({ caseId: c.id, status: c.status, openTasks: open });
-      if (c.status === "CLOSED" && open !== 0) problems.push({ caseId: c.id, status: c.status, openTasks: open });
-      if (!OPEN_STATUSES[c.status] && c.status !== "CLOSED") problems.push({ caseId: c.id, status: c.status, openTasks: open });
-    });
-    var prevSeen = {};
-    (db.tasks || []).forEach(function (t) {
-      if (!t.previousTaskId) return;
-      if (prevSeen[t.previousTaskId]) problems.push({ taskId: t.id, duplicatePrevious: t.previousTaskId });
-      prevSeen[t.previousTaskId] = true;
-    });
-    return problems;
-  }
-
-  function tagMap(db) { var m = {}; (db.tags || []).forEach(function (t) { m[t.id] = t; }); return m; }
-  function tagsOfCase(db, c) {
-    var m = tagMap(db);
-    return splitIds(c && c.tagIds).map(function (id) { return m[id]; }).filter(Boolean);
-  }
-  function activeTags(db) {
-    return (db.tags || []).filter(function (t) { return t.isActive === undefined || t.isActive === "" || bool(t.isActive); })
-      .sort(function (a, b) { return num(a.sortOrder) - num(b.sortOrder) || (a.name < b.name ? -1 : 1); });
-  }
-
-  function taskSort(db) {
-    return function (a, b) {
-      var ca = byId(db.cases, a.caseId), cb = byId(db.cases, b.caseId);
-      var ua = ca && bool(ca.isUrgent) ? 0 : 1, ub = cb && bool(cb.isUrgent) ? 0 : 1;
-      if (ua !== ub) return ua - ub;
-      if (a.dueDate !== b.dueDate) return a.dueDate < b.dueDate ? -1 : 1;
-      return str(a.createdAt) < str(b.createdAt) ? -1 : 1;
-    };
-  }
-
-  /**
-   * The daily diary (home screen): open tasks in three groups.
-   * filters: { tagId, department, from, to, q }
-   */
-  function diary(db, today, filters) {
-    filters = filters || {};
-    var horizon = addDays(today, 7);
-    if (filters.to && isYmd(filters.to) && filters.to > horizon) horizon = filters.to;
-    var q = str(filters.q).toLowerCase();
-    var out = { overdue: [], today: [], upcoming: [] };
-    (db.tasks || []).forEach(function (t) {
-      if (bool(t.isDone) || !isYmd(t.dueDate)) return;
-      var c = t.caseId ? byId(db.cases, t.caseId) : null;
-      if (t.caseId && (!c || c.status === "CLOSED")) return;
-      if (filters.tagId && (!c || splitIds(c.tagIds).indexOf(filters.tagId) === -1)) return;
-      if (filters.department && t.department !== filters.department) return;
-      if (filters.from && isYmd(filters.from) && t.dueDate < filters.from) return;
-      if (filters.to && isYmd(filters.to) && t.dueDate > filters.to) return;
-      if (q && (str(t.title) + " " + str(c && c.fullName) + " " + str(t.project)).toLowerCase().indexOf(q) === -1) return;
-      if (t.dueDate < today) out.overdue.push(t);
-      else if (t.dueDate === today) out.today.push(t);
-      else if (t.dueDate <= horizon) out.upcoming.push(t);
-    });
-    var s = taskSort(db);
-    out.overdue.sort(s); out.today.sort(s); out.upcoming.sort(s);
-    return out;
-  }
-
-  /** Case list with search and filters; each row carries its open task. */
-  function casesList(db, filters) {
-    filters = filters || {};
-    var q = str(filters.q).toLowerCase();
-    var rows = (db.cases || []).filter(function (c) {
-      if (filters.status && c.status !== filters.status) return false;
-      if (filters.tagId && splitIds(c.tagIds).indexOf(filters.tagId) === -1) return false;
-      if (q && (str(c.fullName) + " " + str(c.city) + " " + str(c.phone)).toLowerCase().indexOf(q) === -1) return false;
-      return true;
-    }).map(function (c) { return { case: c, next: openTaskOfCase(db, c.id) }; });
-    var rank = { ACTIVE: 0, WAITING: 1, CLOSED: 2 };
-    rows.sort(function (a, b) {
-      var r = (rank[a.case.status] || 0) - (rank[b.case.status] || 0);
-      if (r) return r;
-      var u = (bool(a.case.isUrgent) ? 0 : 1) - (bool(b.case.isUrgent) ? 0 : 1);
-      if (u) return u;
-      var da = a.next ? a.next.dueDate : "9999", dbb = b.next ? b.next.dueDate : "9999";
-      if (da !== dbb) return da < dbb ? -1 : 1;
-      return str(a.case.fullName) < str(b.case.fullName) ? -1 : 1;
-    });
-    return rows;
-  }
-
-  /** Done tasks of a case, newest first, for the timeline. */
-  function timeline(db, caseId) {
-    return chainOf(db, caseId).filter(function (t) { return bool(t.isDone); }).reverse();
-  }
-
-  function counts(db, today) {
-    var d = diary(db, today, {});
-    var open = (db.cases || []).filter(function (c) { return OPEN_STATUSES[c.status]; });
-    return {
-      overdue: d.overdue.length, today: d.today.length, upcoming: d.upcoming.length,
-      activeCases: open.filter(function (c) { return c.status === "ACTIVE"; }).length,
-      waitingCases: open.filter(function (c) { return c.status === "WAITING"; }).length,
-      urgentCases: open.filter(function (c) { return bool(c.isUrgent); }).length
-    };
-  }
-
-  // ================================================================ validation helpers
-  function V() { this.errors = {}; }
-  V.prototype.text = function (key, label, val, opts) {
-    opts = opts || {};
-    var v = str(val);
-    if (opts.required && !v) this.errors[key] = MSG.required(label);
-    else if (v.length > (opts.max || 500)) this.errors[key] = MSG.tooLong(label, opts.max || 500);
-    return v;
-  };
-  V.prototype.date = function (key, label, val, opts) {
-    opts = opts || {};
-    var v = str(val);
-    if (!v) { if (opts.required) this.errors[key] = MSG.required(label); return ""; }
-    if (!isYmd(v)) { this.errors[key] = MSG.badDate(label); return ""; }
-    if (opts.min && v < opts.min) { this.errors[key] = MSG.pastDate(label); return ""; }
-    return v;
-  };
-  V.prototype.fail = function () {
-    var keys = Object.keys(this.errors);
-    if (!keys.length) return null;
-    return { ok: false, error: "validation", message: this.errors[keys[0]], fields: this.errors };
-  };
-  function err(message, code) { return { ok: false, error: code || "rule", message: message }; }
-
-  // ================================================================ change set
-  // Collects row updates per table and can produce the "after" db for checks.
-  function Changes(db) { this.db = db; this.rows = {}; }
-  Changes.prototype.put = function (table, row) {
-    this.rows[table] = this.rows[table] || [];
-    var list = this.rows[table];
-    for (var i = 0; i < list.length; i++) if (list[i].id === row.id) { list[i] = row; return row; }
-    list.push(row);
-    return row;
-  };
-  Changes.prototype.after = function () {
-    var self = this, out = {};
-    Object.keys(this.db).forEach(function (t) { out[t] = (self.db[t] || []).slice(); });
-    Object.keys(this.rows).forEach(function (t) {
-      var list = out[t] = out[t] || [];
-      self.rows[t].forEach(function (r) {
-        for (var i = 0; i < list.length; i++) if (list[i].id === r.id) { list[i] = r; return; }
-        list.push(r);
-      });
-    });
-    return out;
-  };
-  /** Final gate: refuse the whole change if any touched case breaks the chain rule. */
-  Changes.prototype.result = function (extra) {
-    var after = this.after();
-    var touched = {};
-    (this.rows.cases || []).forEach(function (c) { touched[c.id] = true; });
-    (this.rows.tasks || []).forEach(function (t) { if (t.caseId) touched[t.caseId] = true; });
-    var problems = [];
-    Object.keys(touched).forEach(function (id) { problems = problems.concat(checkInvariant(after, id)); });
-    var prev = {};
-    (after.tasks || []).forEach(function (t) {
-      if (!t.previousTaskId) return;
-      if (prev[t.previousTaskId]) problems.push({ duplicatePrevious: t.previousTaskId });
-      prev[t.previousTaskId] = true;
-    });
-    if (problems.length) return { ok: false, error: "invariant", message: "הפעולה נעצרה: היא הייתה משאירה תיק בלי משימה פתוחה אחת בדיוק.", problems: problems };
-    var res = { ok: true, changes: this.rows };
-    Object.keys(extra || {}).forEach(function (k) { res[k] = extra[k]; });
-    return res;
-  };
-
-  function newTask(ctx, fields) {
-    var t = {
-      id: ctx.uid("tk"), title: fields.title, dueDate: fields.dueDate, originalDueDate: fields.dueDate,
-      postponeCount: 0, isDone: false, completedAt: "", completionNotes: "",
-      department: fields.department || "", project: fields.project || "", createdAt: ctx.now,
-      caseId: fields.caseId || "", assigneeId: fields.assigneeId || ctx.userId || "",
-      contactId: fields.contactId || "", previousTaskId: fields.previousTaskId || "", lastPostponedAt: ""
-    };
-    return t;
-  }
-
-  function cleanTagIds(db, ids) {
-    var m = tagMap(db);
-    var seen = {};
-    return splitIds(ids).filter(function (id) { if (!m[id] || seen[id]) return false; seen[id] = true; return true; }).join(",");
-  }
-  function cleanDept(d) { d = str(d); return DEPARTMENTS[d] ? d : ""; }
-
-  function caseFields(db, v, input, today) {
-    return {
-      fullName: v.text("fullName", "שם התיק", input.fullName, { required: true, max: 120 }),
-      phone: v.text("phone", "טלפון", input.phone, { max: 40 }),
-      city: v.text("city", "עיר", input.city, { max: 80 }),
-      referredBy: v.text("referredBy", "גורם מפנה", input.referredBy, { max: 200 }),
-      knownBy: v.text("knownBy", "מי מכיר את התיק", input.knownBy, { max: 200 }),
-      firstContactDate: v.date("firstContactDate", "תאריך פנייה ראשונה", input.firstContactDate) || (input.firstContactDate === undefined ? today : ""),
-      story: v.text("story", "סיפור התיק", input.story, { max: 20000 }),
-      tagIds: cleanTagIds(db, input.tagIds),
-      isUrgent: bool(input.isUrgent)
-    };
-  }
-
-  // ================================================================ actions
-  var ACTIONS = {
-    /** New case + its mandatory first task. */
-    createCase: function (db, req, ctx) {
-      var v = new V();
-      var f = caseFields(db, v, req.case || {}, ctx.today);
-      var status = str((req.case || {}).status) || "ACTIVE";
-      if (!OPEN_STATUSES[status]) v.errors.status = "תיק חדש יכול להיות פעיל או בהמתנה";
-      var ft = req.firstTask || {};
-      var title = v.text("taskTitle", "המשימה הראשונה", ft.title, { required: true, max: 300 });
-      var due = v.date("taskDue", "תאריך היעד", ft.dueDate, { required: true, min: ctx.today });
-      var bad = v.fail(); if (bad) return bad;
-      var ch = new Changes(db);
-      var c = copy(f);
-      c.id = ctx.uid("cs"); c.status = status; c.closedAt = ""; c.closeReason = "";
-      c.createdAt = ctx.now; c.updatedAt = ctx.now;
-      ch.put("cases", c);
-      var t = ch.put("tasks", newTask(ctx, { title: title, dueDate: due, caseId: c.id, department: cleanDept(ft.department) }));
-      return ch.result({ caseId: c.id, taskId: t.id });
-    },
-
-    /** Edit case details. Status may move between ACTIVE and WAITING only. */
-    updateCase: function (db, req, ctx) {
-      var cur = byId(db.cases, req.id);
-      if (!cur) return err(MSG.notFound, "not_found");
-      var input = req.case || {};
-      var v = new V();
-      var merged = copy(cur);
-      ["fullName", "phone", "city", "referredBy", "knownBy", "firstContactDate", "story", "tagIds", "isUrgent"].forEach(function (k) {
-        if (input[k] === undefined) input[k] = cur[k];
-      });
-      var f = caseFields(db, v, input, ctx.today);
-      if (input.status !== undefined && input.status !== cur.status) {
-        if (cur.status === "CLOSED") v.errors.status = "תיק סגור נפתח מחדש רק עם משימה חדשה";
-        else if (!OPEN_STATUSES[input.status]) v.errors.status = "סגירת תיק נעשית רק דרך סגירת המשימה הפתוחה";
-        else merged.status = input.status;
-      }
-      var bad = v.fail(); if (bad) return bad;
-      Object.keys(f).forEach(function (k) { merged[k] = f[k]; });
-      merged.updatedAt = ctx.now;
-      var ch = new Changes(db);
-      ch.put("cases", merged);
-      return ch.result({ caseId: merged.id });
-    },
-
-    /**
-     * Close a task. For case tasks this is the two-step chaining flow:
-     *   { taskId, notes, contactId?, next: { title, dueDate } }   → next task
-     *   { taskId, notes, contactId?, closeCase: { reason } }       → case closed
-     * General tasks: { taskId, notes? } only.
-     */
-    completeTask: function (db, req, ctx) {
-      var task = byId(db.tasks, req.taskId);
-      if (!task) return err(MSG.notFound, "not_found");
-      if (bool(task.isDone)) return err(MSG.taskDone, "already_done");
-      var v = new V();
-      var isCase = !!task.caseId;
-      var notes = v.text("notes", "דיווח ביצוע", req.notes, { required: isCase, max: 5000 });
-      var contactId = str(req.contactId);
-      if (contactId && !byId(db.contacts, contactId)) v.errors.contactId = "איש הקשר לא נמצא";
-      var ch = new Changes(db);
-      var done = copy(task);
-      done.isDone = true; done.completedAt = ctx.now; done.completionNotes = notes;
-      if (contactId) done.contactId = contactId;
-
-      if (!isCase) {
-        if (req.next || req.closeCase) v.errors.next = "למשימה כללית אין שרשור";
-        var b0 = v.fail(); if (b0) return b0;
-        ch.put("tasks", done);
-        return ch.result({ taskId: done.id });
-      }
-
-      var c = byId(db.cases, task.caseId);
-      if (!c) return err(MSG.notFound, "not_found");
-      if (c.status === "CLOSED") return err(MSG.caseClosed, "case_closed");
-      var hasNext = !!req.next, hasClose = !!req.closeCase;
-      if (hasNext === hasClose) v.errors.what = "יש לבחור מה הלאה: משימה הבאה או סגירת התיק";
-      var nextTitle = "", nextDue = "", reason = "";
-      if (hasNext && !hasClose) {
-        nextTitle = v.text("nextTitle", "המשימה הבאה", req.next.title, { required: true, max: 300 });
-        nextDue = v.date("nextDue", "תאריך היעד", req.next.dueDate, { required: true, min: ctx.today });
-      }
-      if (hasClose && !hasNext) reason = v.text("closeReason", "סיבת הסגירה", req.closeCase.reason, { required: true, max: 500 });
-      var bad = v.fail(); if (bad) return bad;
-
-      ch.put("tasks", done);
-      var cc = copy(c);
-      cc.updatedAt = ctx.now;
-      var extra = { taskId: done.id, caseId: c.id };
-      if (hasNext) {
-        var nt = ch.put("tasks", newTask(ctx, {
-          title: nextTitle, dueDate: nextDue, caseId: c.id, previousTaskId: done.id,
-          department: task.department, assigneeId: task.assigneeId
-        }));
-        extra.nextTaskId = nt.id;
-      } else {
-        cc.status = "CLOSED"; cc.closedAt = ctx.now; cc.closeReason = reason;
-      }
-      ch.put("cases", cc);
-      return ch.result(extra);
-    },
-
-    /** Move a task's due date without closing it. Every move is counted. */
-    postponeTask: function (db, req, ctx) {
-      var task = byId(db.tasks, req.taskId);
-      if (!task) return err(MSG.notFound, "not_found");
-      if (bool(task.isDone)) return err(MSG.taskDone, "already_done");
-      var v = new V();
-      var due = v.date("dueDate", "התאריך החדש", req.dueDate, { required: true, min: ctx.today });
-      var bad = v.fail(); if (bad) return bad;
-      if (due === task.dueDate) return err("התאריך החדש זהה לתאריך הנוכחי", "same_date");
-      var t = copy(task);
-      if (!isYmd(t.originalDueDate)) t.originalDueDate = task.dueDate;
-      t.dueDate = due;
-      t.postponeCount = num(task.postponeCount) + 1;
-      t.lastPostponedAt = ctx.now;
-      var ch = new Changes(db);
-      ch.put("tasks", t);
-      return ch.result({ taskId: t.id });
-    },
-
-    /** Fix a typo in an open task's description (and general-task fields). */
-    updateTask: function (db, req, ctx) {
-      var task = byId(db.tasks, req.taskId);
-      if (!task) return err(MSG.notFound, "not_found");
-      if (bool(task.isDone)) return err(MSG.taskDone, "already_done");
-      var v = new V();
-      var t = copy(task);
-      t.title = v.text("title", "תיאור המשימה", req.title === undefined ? task.title : req.title, { required: true, max: 300 });
-      if (req.department !== undefined) t.department = cleanDept(req.department);
-      if (!task.caseId && req.project !== undefined) t.project = v.text("project", "פרויקט", req.project, { max: 120 });
-      var bad = v.fail(); if (bad) return bad;
-      var ch = new Changes(db);
-      ch.put("tasks", t);
-      return ch.result({ taskId: t.id });
-    },
-
-    /** A task that does not belong to any case. No chaining rules. */
-    createGeneralTask: function (db, req, ctx) {
-      var v = new V();
-      var title = v.text("title", "תיאור המשימה", req.title, { required: true, max: 300 });
-      var due = v.date("dueDate", "תאריך היעד", req.dueDate, { required: true, min: ctx.today });
-      var project = v.text("project", "פרויקט", req.project, { max: 120 });
-      var bad = v.fail(); if (bad) return bad;
-      var ch = new Changes(db);
-      var t = ch.put("tasks", newTask(ctx, { title: title, dueDate: due, department: cleanDept(req.department), project: project }));
-      return ch.result({ taskId: t.id });
-    },
-
-    /** Re-open a closed case: requires the new open task right away. */
-    reopenCase: function (db, req, ctx) {
-      var c = byId(db.cases, req.caseId);
-      if (!c) return err(MSG.notFound, "not_found");
-      if (c.status !== "CLOSED") return err("התיק כבר פתוח", "not_closed");
-      var v = new V();
-      var title = v.text("title", "המשימה הבאה", req.title, { required: true, max: 300 });
-      var due = v.date("dueDate", "תאריך היעד", req.dueDate, { required: true, min: ctx.today });
-      var bad = v.fail(); if (bad) return bad;
-      var last = lastTaskOfCase(db, c.id);
-      var ch = new Changes(db);
-      var cc = copy(c);
-      cc.status = "ACTIVE"; cc.closedAt = ""; cc.closeReason = ""; cc.updatedAt = ctx.now;
-      ch.put("cases", cc);
-      var t = ch.put("tasks", newTask(ctx, { title: title, dueDate: due, caseId: c.id, previousTaskId: last ? last.id : "" }));
-      return ch.result({ caseId: c.id, taskId: t.id });
-    },
-
-    saveTag: function (db, req, ctx) {
-      var v = new V();
-      var name = v.text("name", "שם התגית", req.name, { required: true, max: 60 });
-      var bad = v.fail(); if (bad) return bad;
-      var clash = (db.tags || []).filter(function (t) { return t.id !== req.id && str(t.name) === name; })[0];
-      if (clash) return err("כבר קיימת תגית בשם הזה", "duplicate");
-      var cur = req.id ? byId(db.tags, req.id) : null;
-      if (req.id && !cur) return err(MSG.notFound, "not_found");
-      var t = cur ? copy(cur) : { id: ctx.uid("tg"), sortOrder: (db.tags || []).length, isActive: true };
-      t.name = name;
-      if (req.isActive !== undefined) t.isActive = bool(req.isActive);
-      if (req.sortOrder !== undefined) t.sortOrder = num(req.sortOrder);
-      var ch = new Changes(db);
-      ch.put("tags", t);
-      return ch.result({ tagId: t.id });
-    },
-
-    saveContact: function (db, req, ctx) {
-      var v = new V();
-      var cur = req.id ? byId(db.contacts, req.id) : null;
-      if (req.id && !cur) return err(MSG.notFound, "not_found");
-      var c = cur ? copy(cur) : { id: ctx.uid("ct") };
-      c.fullName = v.text("fullName", "שם איש הקשר", req.fullName, { required: true, max: 120 });
-      c.profession = v.text("profession", "תחום", req.profession, { max: 120 });
-      c.phone = v.text("phone", "טלפון", req.phone, { max: 40 });
-      c.notes = v.text("notes", "הערות", req.notes, { max: 2000 });
-      var bad = v.fail(); if (bad) return bad;
-      var ch = new Changes(db);
-      ch.put("contacts", c);
-      return ch.result({ contactId: c.id });
-    }
-  };
-
-  /** Single entry point for every write. ctx: { now, today, userId, uid } */
-  function run(action, db, req, ctx) {
-    var fn = ACTIONS[action];
-    if (!fn) return { ok: false, error: "unknown_action" };
-    ctx = ctx || {};
-    var full = {
-      now: ctx.now || new Date().toISOString(),
-      today: ctx.today || todayYmd(),
-      userId: ctx.userId || "",
-      uid: ctx.uid || uid
-    };
-    return fn(db || {}, copy(req || {}), full);
-  }
-
-  /** Apply a change set to an in-memory db (demo mode / client cache). */
-  function applyChanges(db, changes) {
-    Object.keys(changes || {}).forEach(function (t) {
-      var list = db[t] = db[t] || [];
-      changes[t].forEach(function (r) {
-        for (var i = 0; i < list.length; i++) if (list[i].id === r.id) { list[i] = r; return; }
-        list.push(r);
-      });
-    });
-    return db;
-  }
-
   function passwordProblem(pw) {
     pw = String(pw || "");
     if (pw.length < 10) return "הסיסמה צריכה לכלול לפחות 10 תווים";
@@ -616,15 +59,420 @@
     return "";
   }
 
+  // ================================================================ dates (calendar days are "yyyy-MM-dd"; "today" is Israel time)
+  var TZ = "Asia/Jerusalem";
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function isYmd(s) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(str(s))) return false;
+    var p = s.split("-").map(Number), d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+    return d.getUTCFullYear() === p[0] && d.getUTCMonth() === p[1] - 1 && d.getUTCDate() === p[2];
+  }
+  function todayYmd(now) {
+    var o = {};
+    new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(now ? new Date(now) : new Date()).forEach(function (p) { o[p.type] = p.value; });
+    return o.year + "-" + o.month + "-" + o.day;
+  }
+  function hourIL(now) { return Number(new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", hourCycle: "h23" }).format(now ? new Date(now) : new Date())) || 0; }
+  function timeIL(iso) { return new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso)); }
+  function utc(ymd) { var p = ymd.split("-").map(Number); return Date.UTC(p[0], p[1] - 1, p[2]); }
+  function addDays(ymd, n) { var d = new Date(utc(ymd) + n * 864e5); return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()); }
+  function diffDays(a, b) { return Math.round((utc(b) - utc(a)) / 864e5); }
+  function fmtDate(ymd) { ymd = str(ymd).slice(0, 10); if (!isYmd(ymd)) return ""; var p = ymd.split("-"); return p[2] + "/" + p[1] + "/" + p[0]; }
+  var WEEKDAYS = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+  function weekday(ymd) { return WEEKDAYS[new Date(utc(ymd)).getUTCDay()]; }
+  function relDay(ymd, today) {
+    var n = diffDays(today, ymd);
+    if (n === 0) return "היום"; if (n === 1) return "מחר"; if (n === -1) return "אתמול"; if (n === 2) return "מחרתיים";
+    if (n < 0) return "לפני " + (-n) + " ימים";
+    if (n < 7) return "יום " + weekday(ymd);
+    return "בעוד " + n + " ימים";
+  }
+  function ago(ymd, today) { var n = diffDays(ymd, today); return n <= 0 ? "היום" : n === 1 ? "אתמול" : "לפני " + n + " ימים"; }
+  function quickDates(today) {
+    return [{ key: "today", label: "היום", date: today }, { key: "tomorrow", label: "מחר", date: addDays(today, 1) },
+      { key: "3days", label: "עוד 3 ימים", date: addDays(today, 3) }, { key: "week", label: "שבוע הבא", date: addDays(today, 7) }];
+  }
+
+  // ================================================================ queries
+  function kindOf(t) { return KINDS[t.kind] ? t.kind : "mine"; }
+  function isDone(t) { return bool(t.done); }
+  function openTasks(db) { return (db.tasks || []).filter(function (t) { return !isDone(t); }); }
+  function caseTasks(db, caseId) { return (db.tasks || []).filter(function (t) { return t.caseId === caseId; }); }
+  function nextOfCase(db, caseId) {
+    return caseTasks(db, caseId).filter(function (t) { return !isDone(t); }).sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; })[0] || null;
+  }
+  function people(db) {
+    var s = {};
+    (db.tasks || []).forEach(function (t) { if (t.who) s[t.who] = true; if (t.owner) s[t.owner] = true; });
+    return Object.keys(s).sort();
+  }
+  function byDue(a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : str(a.createdAt) < str(b.createdAt) ? -1 : 1; }
+
+  /** Home screen groups. filter: { kind, caseId } */
+  function diary(db, today, filter) {
+    filter = filter || {};
+    var out = { overdue: [], today: [], upcoming: [] };
+    openTasks(db).forEach(function (t) {
+      if (filter.kind && kindOf(t) !== filter.kind) return;
+      if (filter.caseId && t.caseId !== filter.caseId) return;
+      if (t.caseId) { var c = byId(db.cases, t.caseId); if (c && c.status === "closed") return; }
+      (t.due < today ? out.overdue : t.due === today ? out.today : out.upcoming).push(t);
+    });
+    out.overdue.sort(byDue); out.today.sort(byDue); out.upcoming.sort(byDue);
+    return out;
+  }
+  function doneTasks(db) {
+    return (db.tasks || []).filter(isDone).sort(function (a, b) { return str(a.completedAt) < str(b.completedAt) ? 1 : -1; });
+  }
+  function counts(db, today) {
+    var open = openTasks(db), c = { overdue: 0, today: 0, done: doneTasks(db).length, all: open.length };
+    KIND_ORDER.forEach(function (k) { c[k] = 0; });
+    open.forEach(function (t) { c[kindOf(t)]++; if (t.due < today) c.overdue++; else if (t.due === today) c.today++; });
+    c.openCases = (db.cases || []).filter(function (x) { return x.status !== "closed"; }).length;
+    return c;
+  }
+  /** Case list with search; filter: { q, status: "open" (= not closed) | "closed" | "all" } */
+  function casesList(db, filter) {
+    filter = filter || {};
+    var q = str(filter.q).toLowerCase(), st = filter.status || "open";
+    return (db.cases || []).filter(function (c) {
+      if (st === "open" && c.status === "closed") return false;
+      if (st === "closed" && c.status !== "closed") return false;
+      if (q && [c.name, c.city, c.info, c.referredBy, c.knownBy, c.phone].join(" ").toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    }).map(function (c) { return { "case": c, next: nextOfCase(db, c.id) }; }).sort(function (a, b) {
+      var da = a.next ? a.next.due : "9999", dbb = b.next ? b.next.due : "9999";
+      return da < dbb ? -1 : da > dbb ? 1 : str(a["case"].name) < str(b["case"].name) ? -1 : 1;
+    });
+  }
+  /** Case history, newest first: updates, finished tasks and documents. */
+  function caseTimeline(db, caseId) {
+    var ev = [];
+    (db.logs || []).forEach(function (l) { if (l.caseId === caseId) ev.push({ type: "log", at: l.createdAt, item: l }); });
+    caseTasks(db, caseId).forEach(function (t) { if (isDone(t)) ev.push({ type: "task", at: t.completedAt, item: t }); });
+    (db.documents || []).forEach(function (d) { if (d.caseId === caseId) ev.push({ type: "doc", at: d.createdAt, item: d }); });
+    return ev.sort(function (a, b) { return str(a.at) < str(b.at) ? 1 : -1; });
+  }
+  function caseDocuments(db, caseId) {
+    return (db.documents || []).filter(function (d) { return d.caseId === caseId; }).sort(function (a, b) { return str(a.createdAt) < str(b.createdAt) ? 1 : -1; });
+  }
+
+  // ================================================================ validation
+  function V() { this.errors = {}; }
+  V.prototype.text = function (key, label, val, opts) {
+    opts = opts || {};
+    var v = str(val), max = opts.max || 300;
+    if (opts.required && !v) this.errors[key] = (opts.msg || "יש למלא " + label);
+    else if (v.length > max) this.errors[key] = label + " ארוך מדי (עד " + max + " תווים)";
+    return v;
+  };
+  V.prototype.date = function (key, label, val, opts) {
+    opts = opts || {};
+    var v = str(val);
+    if (!v) { if (opts.required) this.errors[key] = "יש לבחור " + label; return ""; }
+    if (!isYmd(v)) { this.errors[key] = label + ": תאריך לא תקין"; return ""; }
+    if (opts.min && v < opts.min) { this.errors[key] = "בחרו תאריך מהיום והלאה"; return ""; }
+    if (opts.max && v > opts.max) { this.errors[key] = label + " לא יכול להיות בעתיד"; return ""; }
+    return v;
+  };
+  V.prototype.fail = function () {
+    var keys = Object.keys(this.errors);
+    return keys.length ? { ok: false, error: "validation", message: this.errors[keys[0]], fields: this.errors } : null;
+  };
+  function err(message, code) { return { ok: false, error: code || "rule", message: message }; }
+  var NOT_FOUND = "הרשומה לא נמצאה. ייתכן שהנתונים לא מעודכנים, נסו לרענן.";
+
+  function Changes() { this.rows = {}; this.gone = {}; }
+  Changes.prototype.put = function (table, row) {
+    var list = this.rows[table] = this.rows[table] || [];
+    for (var i = 0; i < list.length; i++) if (list[i].id === row.id) { list[i] = row; return row; }
+    list.push(row);
+    return row;
+  };
+  Changes.prototype.remove = function (table, id) { (this.gone[table] = this.gone[table] || []).push(id); };
+  Changes.prototype.result = function (extra) {
+    var r = { ok: true, changes: this.rows, removed: this.gone };
+    Object.keys(extra || {}).forEach(function (k) { r[k] = extra[k]; });
+    return r;
+  };
+
+  /** Validates the kind-specific links of a task. */
+  function taskLinks(db, v, kind, input) {
+    var o = { who: "", what: "", caseId: "", owner: "", dept: "" };
+    if (kind === "people") {
+      o.who = v.text("who", "אחרי מי עוקבים", input.who, { required: true, max: 80, msg: "כתבו אחרי מי עוקבים" });
+      o.what = v.text("what", "מה הוא אמור לעשות", input.what, { max: 200 });
+    } else if (kind === "case") {
+      o.caseId = str(input.caseId);
+      var c = byId(db.cases, o.caseId);
+      if (!c) v.errors.caseId = "בחרו את התיק מהרשימה";
+      else if (c.status === "closed") v.errors.caseId = "התיק סגור. אפשר לפתוח אותו מחדש מכרטיס התיק";
+      o.owner = v.text("owner", "מי מטפל", input.owner, { max: 80 });
+    } else if (kind === "org") {
+      o.dept = str(input.dept);
+      if (o.dept && DEPTS.indexOf(o.dept) === -1) v.errors.dept = "מחלקה לא מוכרת";
+    }
+    return o;
+  }
+  function newTask(ctx, kind, title, due, links, extra) {
+    var t = { id: ctx.uid("tk"), kind: kind, title: title, due: due, original: due, moved: 0, who: links.who || "", what: links.what || "",
+      caseId: links.caseId || "", owner: links.owner || "", dept: links.dept || "", done: false, result: "", completedAt: "", note: "",
+      createdAt: ctx.now, createdBy: ctx.userId, openedAt: ctx.today, steps: 1, prevId: "" };
+    Object.keys(extra || {}).forEach(function (k) { t[k] = extra[k]; });
+    return t;
+  }
+  function logRow(ctx, caseId, text, auto) {
+    return { id: ctx.uid("lg"), caseId: caseId, text: text, auto: !!auto, createdAt: ctx.now, by: ctx.userId };
+  }
+  var CASE_FIELDS = [["name", "שם התיק", 120, true], ["phone", "טלפון", 40], ["city", "עיר", 80], ["info", "נתונים חשובים", 300],
+    ["referredBy", "מפנה", 200], ["knownBy", "מכיר את התיק / ראש חבורה", 200], ["notes", "הערות חשובות", 3000], ["story", "סיפור התיק", 20000]];
+  function caseFields(v, input, today, cur) {
+    var o = {};
+    CASE_FIELDS.forEach(function (f) {
+      var val = input[f[0]] === undefined && cur ? cur[f[0]] : input[f[0]];
+      o[f[0]] = v.text(f[0], f[1], val, { required: f[3], max: f[2], msg: f[3] ? "כתבו את שם התיק" : "" });
+    });
+    var fc = input.firstContact === undefined && cur ? cur.firstContact : input.firstContact;
+    o.firstContact = v.date("firstContact", "תאריך פנייה ראשונה", fc, { max: today });
+    return o;
+  }
+
+  // ================================================================ operations
+  var OPS = {
+    addTask: function (db, input, ctx) {
+      var v = new V(), kind = KINDS[input.kind] ? input.kind : "mine";
+      var title = v.text("title", "מה צריך לעשות", input.title, { required: true, msg: "כתבו מה צריך לעשות" });
+      var due = v.date("due", "תאריך", input.due, { required: true, min: ctx.today });
+      var links = taskLinks(db, v, kind, input);
+      var bad = v.fail(); if (bad) return bad;
+      var ch = new Changes();
+      var t = ch.put("tasks", newTask(ctx, kind, title, due, links));
+      return ch.result({ id: t.id });
+    },
+
+    /**
+     * Close a task: { id, result: "done"|"notdone", note, next?: { title, due, owner } }.
+     * "next" opens the follow-up in the same thread (same kind and links, opening date
+     * and round count carried over) - e.g. "check again with him on Thursday".
+     */
+    completeTask: function (db, input, ctx) {
+      var t = byId(db.tasks, input.id);
+      if (!t) return err(NOT_FOUND, "not_found");
+      if (isDone(t)) return err("המשימה כבר סומנה", "already_done");
+      var v = new V();
+      var result = input.result === "notdone" ? "notdone" : "done";
+      var note = v.text("note", "הפירוט", input.note, { max: 5000 });
+      var next = null;
+      if (input.next) {
+        next = {
+          title: v.text("nextTitle", "הצעד הבא", input.next.title || t.title, { required: true, msg: "כתבו מה הצעד הבא" }),
+          due: v.date("nextDue", "תאריך", input.next.due, { required: true, min: ctx.today }),
+          owner: v.text("nextOwner", "מי מטפל", input.next.owner === undefined ? t.owner : input.next.owner, { max: 80 })
+        };
+      }
+      var bad = v.fail(); if (bad) return bad;
+      var ch = new Changes();
+      var d = copy(t);
+      d.done = true; d.result = result; d.note = note; d.completedAt = ctx.now; d.completedBy = ctx.userId;
+      ch.put("tasks", d);
+      var extra = { id: d.id };
+      if (next) {
+        var n = ch.put("tasks", newTask(ctx, kindOf(t), next.title, next.due,
+          { who: t.who, what: t.what, caseId: t.caseId, owner: kindOf(t) === "case" ? next.owner : "", dept: t.dept },
+          { openedAt: t.openedAt || ctx.today, steps: num(t.steps || 1) + 1, prevId: t.id }));
+        extra.nextId = n.id;
+      }
+      if (t.caseId) { var c = byId(db.cases, t.caseId); if (c) { var cc = copy(c); cc.updatedAt = ctx.now; ch.put("cases", cc); } }
+      return ch.result(extra);
+    },
+
+    /** Re-open a task that was marked by mistake (and drop a follow-up it created, if untouched). */
+    undoTask: function (db, input, ctx) {
+      var t = byId(db.tasks, input.id);
+      if (!t) return err(NOT_FOUND, "not_found");
+      if (!isDone(t)) return err("המשימה עדיין פתוחה", "not_done");
+      var ch = new Changes();
+      var r = copy(t);
+      r.done = false; r.result = ""; r.note = ""; r.completedAt = ""; r.completedBy = "";
+      ch.put("tasks", r);
+      (db.tasks || []).forEach(function (x) { if (x.prevId === t.id && !isDone(x) && num(x.moved) === 0) ch.remove("tasks", x.id); });
+      return ch.result({ id: r.id });
+    },
+
+    postponeTask: function (db, input, ctx) {
+      var t = byId(db.tasks, input.id);
+      if (!t) return err(NOT_FOUND, "not_found");
+      if (isDone(t)) return err("המשימה כבר סומנה", "already_done");
+      var v = new V();
+      var due = v.date("due", "התאריך החדש", input.due, { required: true, min: ctx.today });
+      var bad = v.fail(); if (bad) return bad;
+      if (due === t.due) return err("זה התאריך הנוכחי", "same_date");
+      var r = copy(t);
+      if (!isYmd(r.original)) r.original = t.due;
+      r.due = due; r.moved = num(t.moved) + 1; r.lastMovedAt = ctx.now;
+      var ch = new Changes();
+      ch.put("tasks", r);
+      return ch.result({ id: r.id });
+    },
+
+    updateTask: function (db, input, ctx) {
+      var t = byId(db.tasks, input.id);
+      if (!t) return err(NOT_FOUND, "not_found");
+      var v = new V(), kind = KINDS[input.kind] ? input.kind : kindOf(t);
+      var title = v.text("title", "מה צריך לעשות", input.title === undefined ? t.title : input.title, { required: true, msg: "כתבו מה צריך לעשות" });
+      var links = taskLinks(db, v, kind, input.kind === undefined ? t : input);
+      var bad = v.fail(); if (bad) return bad;
+      var r = copy(t);
+      r.kind = kind; r.title = title;
+      Object.keys(links).forEach(function (k) { r[k] = links[k]; });
+      var ch = new Changes();
+      ch.put("tasks", r);
+      return ch.result({ id: r.id });
+    },
+
+    deleteTask: function (db, input) {
+      var t = byId(db.tasks, input.id);
+      if (!t) return err(NOT_FOUND, "not_found");
+      var ch = new Changes();
+      ch.remove("tasks", t.id);
+      return ch.result({ id: t.id });
+    },
+
+    /** New case + its first task (what, who, when). */
+    createCase: function (db, input, ctx) {
+      var v = new V();
+      var f = caseFields(v, input["case"] || {}, ctx.today);
+      var ft = input.firstTask || {};
+      var title = v.text("ftTitle", "המשימה הראשונה", ft.title, { required: true, msg: "כתבו מה המשימה הראשונה" });
+      var due = v.date("ftDue", "תאריך", ft.due, { required: true, min: ctx.today });
+      var owner = v.text("ftOwner", "מי מטפל", ft.owner, { max: 80 });
+      var bad = v.fail(); if (bad) return bad;
+      var ch = new Changes();
+      var c = copy(f);
+      c.id = ctx.uid("cs"); c.status = "open"; c.closeReason = ""; c.createdAt = ctx.now; c.updatedAt = ctx.now; c.createdBy = ctx.userId; c.folderId = "";
+      if (!c.firstContact) c.firstContact = ctx.today;
+      ch.put("cases", c);
+      var t = ch.put("tasks", newTask(ctx, "case", title, due, { caseId: c.id, owner: owner }));
+      return ch.result({ id: c.id, taskId: t.id });
+    },
+
+    updateCase: function (db, input, ctx) {
+      var cur = byId(db.cases, input.id);
+      if (!cur) return err(NOT_FOUND, "not_found");
+      var v = new V();
+      var f = caseFields(v, input["case"] || {}, ctx.today, cur);
+      var bad = v.fail(); if (bad) return bad;
+      var c = copy(cur);
+      Object.keys(f).forEach(function (k) { c[k] = f[k]; });
+      c.updatedAt = ctx.now;
+      var ch = new Changes();
+      ch.put("cases", c);
+      return ch.result({ id: c.id });
+    },
+
+    /** open / waiting / closed. Closing needs a reason and closes the case's open tasks. */
+    setCaseStatus: function (db, input, ctx) {
+      var cur = byId(db.cases, input.id);
+      if (!cur) return err(NOT_FOUND, "not_found");
+      var status = input.status;
+      if (!CASE_STATUS[status]) return err("מצב לא מוכר", "validation");
+      if (status === cur.status) return err("התיק כבר במצב הזה", "same");
+      var v = new V();
+      var reason = status === "closed" ? v.text("reason", "סיבת הסגירה", input.reason, { required: true, max: 300, msg: "כתבו סיבת סגירה" }) : "";
+      var bad = v.fail(); if (bad) return bad;
+      var ch = new Changes();
+      var c = copy(cur);
+      c.status = status; c.closeReason = reason; c.updatedAt = ctx.now;
+      if (status === "closed") {
+        c.closedAt = ctx.now;
+        caseTasks(db, c.id).forEach(function (t) {
+          if (isDone(t)) return;
+          var d = copy(t); d.done = true; d.result = "notdone"; d.note = "נסגר עם סגירת התיק"; d.completedAt = ctx.now; d.completedBy = ctx.userId;
+          ch.put("tasks", d);
+        });
+      }
+      ch.put("cases", c);
+      ch.put("logs", logRow(ctx, c.id, status === "closed" ? "התיק נסגר. סיבה: " + reason : "מצב התיק שונה ל: " + CASE_STATUS[status], true));
+      return ch.result({ id: c.id });
+    },
+
+    addLog: function (db, input, ctx) {
+      var c = byId(db.cases, input.caseId);
+      if (!c) return err(NOT_FOUND, "not_found");
+      var v = new V();
+      var text = v.text("text", "העדכון", input.text, { required: true, max: 10000, msg: "כתבו את העדכון" });
+      var bad = v.fail(); if (bad) return bad;
+      var ch = new Changes();
+      var l = ch.put("logs", logRow(ctx, c.id, text));
+      var cc = copy(c); cc.updatedAt = ctx.now; ch.put("cases", cc);
+      return ch.result({ id: l.id });
+    },
+
+    /** Called by the server after the file is stored in Drive (or by the demo backend). */
+    addDocument: function (db, input, ctx) {
+      var c = byId(db.cases, input.caseId);
+      if (!c) return err(NOT_FOUND, "not_found");
+      var v = new V();
+      var name = v.text("name", "שם הקובץ", input.name, { required: true, max: 200 });
+      var note = v.text("note", "תיאור", input.note, { max: 500 });
+      if (num(input.size) > MAX_UPLOAD_MB * 1024 * 1024) v.errors.size = "הקובץ גדול מדי (עד " + MAX_UPLOAD_MB + "MB)";
+      var bad = v.fail(); if (bad) return bad;
+      var ch = new Changes();
+      var d = ch.put("documents", { id: ctx.uid("dc"), caseId: c.id, name: name, note: note, mime: str(input.mime), size: num(input.size),
+        fileId: str(input.fileId), url: /^https:\/\//.test(str(input.url)) ? str(input.url) : "", createdAt: ctx.now, by: ctx.userId });
+      var cc = copy(c); cc.updatedAt = ctx.now; if (input.folderId) cc.folderId = str(input.folderId); ch.put("cases", cc);
+      return ch.result({ id: d.id });
+    },
+
+    removeDocument: function (db, input) {
+      var d = byId(db.documents, input.id);
+      if (!d) return err(NOT_FOUND, "not_found");
+      var ch = new Changes();
+      ch.remove("documents", d.id);
+      return ch.result({ id: d.id, fileId: d.fileId });
+    }
+  };
+
+  /** Single entry point for every write. ctx: { now, today, userId, uid } */
+  function run(op, db, input, ctx) {
+    if (!Object.prototype.hasOwnProperty.call(OPS, op)) return { ok: false, error: "unknown_action" };
+    ctx = ctx || {};
+    var full = { now: ctx.now || new Date().toISOString(), today: ctx.today || todayYmd(), userId: ctx.userId || "", uid: ctx.uid || uid };
+    return OPS[op](db || {}, copy(input || {}), full);
+  }
+
+  /** Apply a result to an in-memory db (client cache / demo). */
+  function apply(db, res) {
+    Object.keys(res.changes || {}).forEach(function (t) {
+      var list = db[t] = db[t] || [];
+      res.changes[t].forEach(function (r) {
+        for (var i = 0; i < list.length; i++) if (list[i].id === r.id) { list[i] = r; return; }
+        list.push(r);
+      });
+    });
+    Object.keys(res.removed || {}).forEach(function (t) {
+      var ids = res.removed[t];
+      db[t] = (db[t] || []).filter(function (r) { return ids.indexOf(r.id) === -1; });
+    });
+    return db;
+  }
+
+  function fileSize(n) {
+    n = num(n);
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return Math.round(n / 1024) + " KB";
+    return (n / 1024 / 1024).toFixed(1) + " MB";
+  }
+
   return {
-    CASE_STATUS: CASE_STATUS, DEPARTMENTS: DEPARTMENTS, ROLES: ROLES, DEFAULT_TAGS: DEFAULT_TAGS, TABLES: TABLES,
-    bool: bool, str: str, num: num, byId: byId, uid: uid, splitIds: splitIds, escapeHtml: escapeHtml,
-    normEmail: normEmail, isEmail: isEmail, passwordProblem: passwordProblem,
-    isYmd: isYmd, todayYmd: todayYmd, hourIL: hourIL, addDays: addDays, diffDays: diffDays, fmtDate: fmtDate,
-    fmtDateTime: fmtDateTime, weekday: weekday, relDay: relDay, quickDates: quickDates,
-    caseTasks: caseTasks, openTaskOfCase: openTaskOfCase, openTasksOfCase: openTasksOfCase, chainOf: chainOf,
-    lastTaskOfCase: lastTaskOfCase, checkInvariant: checkInvariant, tagsOfCase: tagsOfCase, activeTags: activeTags,
-    diary: diary, casesList: casesList, timeline: timeline, counts: counts,
-    ACTIONS: Object.keys(ACTIONS), run: run, applyChanges: applyChanges
+    KINDS: KINDS, KIND_ORDER: KIND_ORDER, CASE_STATUS: CASE_STATUS, CASE_STATUS_ORDER: CASE_STATUS_ORDER, DEPTS: DEPTS, ROLES: ROLES,
+    TABLES: TABLES, MAX_UPLOAD_MB: MAX_UPLOAD_MB, OPS: Object.keys(OPS),
+    bool: bool, str: str, num: num, byId: byId, uid: uid, escapeHtml: escapeHtml, normEmail: normEmail, isEmail: isEmail, passwordProblem: passwordProblem,
+    isYmd: isYmd, todayYmd: todayYmd, hourIL: hourIL, timeIL: timeIL, addDays: addDays, diffDays: diffDays, fmtDate: fmtDate, weekday: weekday,
+    relDay: relDay, ago: ago, quickDates: quickDates, fileSize: fileSize,
+    kindOf: kindOf, isDone: isDone, openTasks: openTasks, caseTasks: caseTasks, nextOfCase: nextOfCase, people: people,
+    diary: diary, doneTasks: doneTasks, counts: counts, casesList: casesList, caseTimeline: caseTimeline, caseDocuments: caseDocuments,
+    run: run, apply: apply
   };
 });

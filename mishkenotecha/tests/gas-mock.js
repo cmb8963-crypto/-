@@ -53,12 +53,35 @@ export function createGas() {
     getSheets: () => Object.values(sheets),
     deleteSheet: (s) => { delete sheets[s.name]; }
   };
-  const folder = {
-    getId: () => "f1", getUrl: () => "https://drive.google.com/f1",
-    getFoldersByName: () => ({ hasNext: () => false }),
-    createFolder: () => folder,
-    getFiles: () => ({ hasNext: () => false })
-  };
+  // A tiny in-memory Drive: folders and files with ids.
+  const drive = { folders: {}, files: {} };
+  let seq = 0;
+  function makeFolder(name, parent) {
+    const id = "fo" + (++seq);
+    const f = {
+      id, name, parent, trashed: false,
+      getId: () => id, getName: () => f.name, getUrl: () => "https://drive.google.com/drive/folders/" + id, isTrashed: () => f.trashed,
+      getFoldersByName: (n) => {
+        const list = Object.values(drive.folders).filter((x) => x.parent === id && x.name === n && !x.trashed);
+        return { hasNext: () => list.length > 0, next: () => list.shift() };
+      },
+      createFolder: (n) => makeFolder(n, id),
+      createFile: (blob) => makeFile(blob, id),
+      getFiles: () => ({ hasNext: () => false })
+    };
+    drive.folders[id] = f;
+    return f;
+  }
+  function makeFile(blob, parent) {
+    const id = "fi" + (++seq);
+    const f = {
+      id, parent, blob, trashed: false, description: "",
+      getId: () => id, getUrl: () => "https://drive.google.com/file/d/" + id + "/view", getMimeType: () => blob.mime,
+      setDescription: (d) => { f.description = d; }, setTrashed: (v) => { f.trashed = v; }, moveTo() {}, makeCopy() {}
+    };
+    drive.files[id] = f;
+    return f;
+  }
   const b64 = (buf) => Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
   const ctx = {
     PropertiesService: { getScriptProperties: () => ({
@@ -71,7 +94,11 @@ export function createGas() {
     }) },
     LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
     SpreadsheetApp: { create: () => spreadsheet, openById: () => spreadsheet },
-    DriveApp: { createFolder: () => folder, getFolderById: () => folder, getFileById: () => ({ moveTo() {}, makeCopy() {} }) },
+    DriveApp: {
+      createFolder: (n) => makeFolder(n, ""),
+      getFolderById: (id) => { if (!drive.folders[id]) throw new Error("no folder"); return drive.folders[id]; },
+      getFileById: (id) => drive.files[id] || { moveTo() {}, makeCopy() {}, setTrashed() {} }
+    },
     ScriptApp: { getProjectTriggers: () => [], deleteTrigger() {}, newTrigger: () => {
       const b = { timeBased: () => b, everyDays: () => b, atHour: () => b, everyMinutes: () => b, create: () => ({}) };
       return b;
@@ -87,7 +114,8 @@ export function createGas() {
       computeHmacSha256Signature: (s, key) => Array.from(crypto.createHmac("sha256", key).update(String(s), "utf8").digest()),
       base64EncodeWebSafe: (v) => b64(typeof v === "string" ? Buffer.from(v, "utf8") : Buffer.from(v.map((b) => b & 0xff))),
       base64DecodeWebSafe: (s) => Array.from(Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64")),
-      newBlob: (bytes) => ({ getDataAsString: () => Buffer.from(bytes).toString("utf8") }),
+      newBlob: (bytes, mime, name) => ({ bytes, mime, name, getDataAsString: () => Buffer.from(bytes).toString("utf8") }),
+      base64Decode: (s) => { if (!/^[A-Za-z0-9+/=]*$/.test(s)) throw new Error("bad base64"); return Array.from(Buffer.from(s, "base64")); },
       formatDate: (d, tz, fmt) => {
         const p = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" })
           .formatToParts(d).map((x) => [x.type, x.value]));
@@ -102,5 +130,5 @@ export function createGas() {
   const code = fs.readFileSync(path.join(here, "../js/core.js"), "utf8") + "\n" + fs.readFileSync(path.join(here, "../apps-script/src/Server.js"), "utf8");
   vm.runInContext(code, ctx);
   const post = (body) => JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify(body) } }).body);
-  return { ctx, post, props, sheets, logs, mails };
+  return { ctx, post, props, sheets, logs, mails, drive };
 }

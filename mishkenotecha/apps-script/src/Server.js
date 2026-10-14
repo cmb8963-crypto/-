@@ -16,6 +16,8 @@
  *    the tests run. Each write runs under a script lock: read → MK.run() →
  *    write every changed table, and is recorded in the "audit" sheet.
  *  - Case data is never written to logs (only ids and action names).
+ *  - Documents are stored in Google Drive, one folder per case, under the
+ *    system's private folder. Only links/ids are kept in the sheet.
  */
 
 var TOKEN_TTL_H = 12;
@@ -55,7 +57,7 @@ function json(obj) {
 // ======================================================================= setup
 /**
  * Run once from the Apps Script editor (select "setup" and press Run).
- * Creates the private database sheet, the signing secret, default tags and a
+ * Creates the private database sheet, the Drive folders, the signing secret and a
  * daily backup, and prints a one-time SETUP CODE for creating the first admin.
  */
 function setup() {
@@ -74,11 +76,11 @@ function setup() {
     props.setProperty("DB_ID", ss.getId());
   }
   subFolder(root, "גיבויים");
+  subFolder(root, "תיקים - מסמכים");
   var d = db();
   MK.TABLES.concat(["audit"]).forEach(function (t) { sheetOf(t); });
   var first = d.getSheetByName("Sheet1") || d.getSheetByName("גיליון1");
   if (first && d.getSheets().length > 1) d.deleteSheet(first);
-  seedDefaults();
 
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger("dailyJob").timeBased().everyDays(1).atHour(3).create();
@@ -105,13 +107,7 @@ function resetAdminPassword() {
   Logger.log("קוד איפוס חד-פעמי: " + code + " (במסך הכניסה: 'שכחתי סיסמה / קוד הגדרה')");
 }
 
-function seedDefaults() {
-  if (!readTable("tags").length) {
-    writeTable("tags", MK.DEFAULT_TAGS.map(function (name, i) {
-      return { id: "tg" + (i + 1), name: name, sortOrder: i, isActive: "true" };
-    }));
-  }
-}
+
 
 // ======================================================================= storage
 var _dbCache = null, _tableCache = {};
@@ -183,9 +179,14 @@ function withLock(fn) {
   lock.waitLock(20000);
   try { _tableCache = {}; return fn(); } finally { lock.releaseLock(); }
 }
-/** Merge changed rows into their tables. Secret "_" columns are preserved, never overwritten. */
-function persist(changes) {
-  Object.keys(changes).forEach(function (t) {
+/** Write a result of MK.run: changed rows are merged, removed rows deleted. Secret "_" columns are never overwritten. */
+function persist(changes, removed) {
+  Object.keys(removed || {}).forEach(function (t) {
+    if (MK.TABLES.indexOf(t) === -1 || t === "users") throw new Error("table");
+    var ids = removed[t];
+    writeTable(t, readTable(t).filter(function (r) { return ids.indexOf(r.id) === -1; }));
+  });
+  Object.keys(changes || {}).forEach(function (t) {
     if (MK.TABLES.indexOf(t) === -1 || t === "users") throw new Error("table");
     var rows = readTable(t).slice();
     var idx = {};
@@ -361,7 +362,9 @@ var USER_ACTIONS = {
       ok: true, db: out, me: publicUser(user),
       meta: {
         today: Utilities.formatDate(new Date(), TZ_IL, "yyyy-MM-dd"),
-        dbUrl: user.role === "ADMIN" && props.getProperty("DB_ID") ? "https://docs.google.com/spreadsheets/d/" + props.getProperty("DB_ID") : ""
+        dbUrl: user.role === "ADMIN" && props.getProperty("DB_ID") ? "https://docs.google.com/spreadsheets/d/" + props.getProperty("DB_ID") : "",
+        driveUrl: props.getProperty("ROOT_FOLDER_ID") ? "https://drive.google.com/drive/folders/" + props.getProperty("ROOT_FOLDER_ID") : "",
+        maxUploadMb: MK.MAX_UPLOAD_MB
       }
     };
   },
@@ -370,22 +373,52 @@ var USER_ACTIONS = {
   mutate: function (req, user) {
     if (!CASE_ROLES[user.role]) return { ok: false, error: "forbidden" };
     var op = String(req.op || "");
-    if (MK.ACTIONS.indexOf(op) === -1) return { ok: false, error: "unknown_action" };
+    // addDocument is server-only: it is created by uploadDocument after the file is in Drive.
+    if (MK.OPS.indexOf(op) === -1 || op === "addDocument") return { ok: false, error: "unknown_action" };
     var input = req.input || {};
     return withLock(function () {
       var data = loadDb();
-      var res = MK.run(op, data, input, {
-        now: new Date().toISOString(),
-        today: Utilities.formatDate(new Date(), TZ_IL, "yyyy-MM-dd"),
-        userId: user.id,
-        uid: function (p) { return p + "_" + Utilities.getUuid().replace(/-/g, "").slice(0, 16); }
-      });
+      var res = MK.run(op, data, input, runCtx(user));
       if (!res.ok) return res;
-      persist(res.changes);
-      var ids = [];
-      Object.keys(res.changes).forEach(function (t) { res.changes[t].forEach(function (r) { ids.push(t + ":" + r.id); }); });
-      audit(user.id, op, ids.join(","));
+      persist(res.changes, res.removed);
+      if (op === "removeDocument" && res.fileId) { try { DriveApp.getFileById(res.fileId).setTrashed(true); } catch (e) { /* already gone */ } }
+      audit(user.id, op, changedIds(res));
       return res;
+    });
+  },
+
+  /** Upload a document to the case's Drive folder: { caseId, name, mime, data (base64), note } */
+  uploadDocument: function (req, user) {
+    if (!CASE_ROLES[user.role]) return { ok: false, error: "forbidden" };
+    var bytes;
+    try { bytes = Utilities.base64Decode(String(req.data || "")); } catch (e) { return { ok: false, error: "validation", message: "הקובץ לא נקרא כראוי. נסו שוב." }; }
+    if (!bytes.length) return { ok: false, error: "validation", message: "הקובץ ריק" };
+    if (bytes.length > MK.MAX_UPLOAD_MB * 1024 * 1024) return { ok: false, error: "validation", message: "הקובץ גדול מדי (עד " + MK.MAX_UPLOAD_MB + "MB)" };
+    var name = MK.str(req.name).replace(/[\\/:*?"<>|]+/g, "_").slice(0, 200) || "מסמך";
+    return withLock(function () {
+      var data = loadDb();
+      var c = MK.byId(data.cases, req.caseId);
+      if (!c) return { ok: false, error: "not_found", message: "התיק לא נמצא" };
+      var folder = caseFolder(c);
+      var file = folder.createFile(Utilities.newBlob(bytes, MK.str(req.mime) || "application/octet-stream", name));
+      if (req.note) file.setDescription(MK.str(req.note).slice(0, 500));
+      var res = MK.run("addDocument", data, { caseId: c.id, name: name, note: req.note, mime: file.getMimeType(), size: bytes.length,
+        fileId: file.getId(), url: file.getUrl(), folderId: folder.getId() }, runCtx(user));
+      if (!res.ok) { file.setTrashed(true); return res; }
+      persist(res.changes, res.removed);
+      audit(user.id, "uploadDocument", changedIds(res));
+      return res;
+    });
+  },
+
+  /** Link to the case's folder in Drive (created on first use). */
+  caseFolder: function (req, user) {
+    if (!CASE_ROLES[user.role]) return { ok: false, error: "forbidden" };
+    return withLock(function () {
+      var c = MK.byId(readTable("cases"), req.caseId);
+      if (!c) return { ok: false, error: "not_found", message: "התיק לא נמצא" };
+      var f = caseFolder(c);
+      return { ok: true, url: f.getUrl(), changes: { cases: [publicRow(MK.byId(readTable("cases"), c.id))] } };
     });
   },
 
@@ -405,6 +438,30 @@ var USER_ACTIONS = {
   }
 };
 
+function runCtx(user) {
+  return {
+    now: new Date().toISOString(),
+    today: Utilities.formatDate(new Date(), TZ_IL, "yyyy-MM-dd"),
+    userId: user.id,
+    uid: function (p) { return p + "_" + Utilities.getUuid().replace(/-/g, "").slice(0, 16); }
+  };
+}
+function changedIds(res) {
+  var ids = [];
+  Object.keys(res.changes || {}).forEach(function (t) { res.changes[t].forEach(function (r) { ids.push(t + ":" + r.id); }); });
+  Object.keys(res.removed || {}).forEach(function (t) { res.removed[t].forEach(function (id) { ids.push("-" + t + ":" + id); }); });
+  return ids.join(",");
+}
+/** The case's own Drive folder (named after the case), created on first use. Call under the lock. */
+function caseFolder(c) {
+  if (c.folderId) { try { var f = DriveApp.getFolderById(c.folderId); if (!f.isTrashed()) return f; } catch (e) { /* recreate */ } }
+  var parent = subFolder(rootFolder(), "תיקים - מסמכים");
+  var folder = parent.createFolder(MK.str(c.name).replace(/[\\/:*?"<>|]+/g, "_").slice(0, 100) || "תיק");
+  var row = {}; Object.keys(c).forEach(function (k) { row[k] = c[k]; }); row.folderId = folder.getId();
+  persist({ cases: [row] });
+  return folder;
+}
+
 // ======================================================================= jobs
 function rootFolder() { return DriveApp.getFolderById(PropertiesService.getScriptProperties().getProperty("ROOT_FOLDER_ID")); }
 function subFolder(parent, name) {
@@ -420,10 +477,11 @@ function dailyJob() {
   while (it.hasNext()) files.push(it.next());
   files.sort(function (a, b) { return b.getDateCreated() - a.getDateCreated(); });
   files.slice(30).forEach(function (f) { f.setTrashed(true); });
-  var problems = MK.checkInvariant(loadDb());
-  if (problems.length) {
-    audit("", "invariant_problems", problems.length + " cases");
-    MailApp.sendEmail(Session.getEffectiveUser().getEmail(), "משכנותיך: נמצאו תיקים בלי משימה פתוחה",
-      "בבדיקה הלילית נמצאו " + problems.length + " תיקים שלא עומדים בכלל 'משימה פתוחה אחת בדיוק'. היכנסו למערכת ובדקו את התיקים המסומנים.");
+  var d = loadDb();
+  var stale = d.cases.filter(function (c) { return c.status === "open" && !MK.nextOfCase(d, c.id); }).length;
+  if (stale) {
+    audit("", "cases_without_next_step", String(stale));
+    MailApp.sendEmail(Session.getEffectiveUser().getEmail(), "משכנותיך: יש תיקים פתוחים בלי צעד הבא",
+      "בבדיקה הלילית נמצאו " + stale + " תיקים פתוחים שאין להם משימה פתוחה. היכנסו למערכת ובדקו אותם ברשימת התיקים.");
   }
 }

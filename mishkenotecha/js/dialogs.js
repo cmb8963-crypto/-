@@ -1,412 +1,273 @@
-/* dialogs.js - every form in the system, as modals. Business rules are enforced by MK (core.js). */
+/* dialogs.js - every window: close / defer / edit a task, new / edit / close a case, documents, password. */
 var Dialogs = (function () {
   "use strict";
-  var h = UI.h, icon = UI.icon, raw = UI.raw;
-
-  // ------------------------------------------------------------ building blocks
-  function field(label, control, opts) {
-    opts = opts || {};
-    return h`<div class="field" ${opts.style ? raw('style="' + opts.style + '"') : ""}>
-      <label ${opts.for ? raw('for="' + opts.for + '"') : ""}>${label}${opts.req ? h`<span class="req">*</span>` : ""}</label>
-      ${control}${opts.hint ? h`<span class="hint">${opts.hint}</span>` : ""}</div>`;
-  }
-  function text(name, value, attrs) {
-    return h`<input type="text" id="f_${name}" name="${name}" value="${value || ""}" ${raw(attrs || "")}>`;
-  }
-  function dateInput(name, value, min) {
-    return h`<input type="date" id="f_${name}" name="${name}" value="${value || ""}" ${min ? raw('min="' + min + '"') : ""}>`;
-  }
-  /** Date input + quick-pick chips (tomorrow / 3 days / next week). */
-  function datePicker(name, value, withToday) {
-    var t = App.today();
-    var picks = (withToday ? [{ label: "היום", date: t }] : []).concat(MK.quickDates(t));
-    return h`<div class="stack date-pick">
-      <div class="chips" data-quick="${name}">${picks.map(function (q) {
-        return h`<button type="button" class="chip ${q.date === value ? "on" : ""}" data-date="${q.date}">${q.label} <span class="faint small">${MK.fmtDate(q.date).slice(0, 5)}</span></button>`;
-      })}</div>
-      ${dateInput(name, value, t)}</div>`;
-  }
-  function wireDates(m) {
-    m.$$("[data-quick]").forEach(function (box) {
-      var input = m.$('[name="' + box.dataset.quick + '"]');
-      function sync() { UI.$$("[data-date]", box).forEach(function (b) { b.classList.toggle("on", b.dataset.date === input.value); }); }
-      box.addEventListener("click", function (e) {
-        var b = e.target.closest("[data-date]");
-        if (!b) return;
-        input.value = b.dataset.date;
-        sync();
-      });
-      input.addEventListener("input", sync);
-    });
-  }
-  function tagChips(selected) {
-    var sel = MK.splitIds(selected);
-    var tags = MK.activeTags(App.state.db);
-    // keep inactive tags that are already on the case
-    MK.tagsOfCase(App.state.db, { tagIds: sel.join(",") }).forEach(function (t) { if (tags.indexOf(t) === -1) tags.push(t); });
-    if (!tags.length) return h`<span class="muted small">אין תגיות. אפשר להוסיף במסך ההגדרות.</span>`;
-    return h`<div class="chips">${tags.map(function (t) {
-      return h`<label class="chip chip-check"><input type="checkbox" name="tagIds" value="${t.id}" ${sel.indexOf(t.id) !== -1 ? "checked" : ""}>${t.name}</label>`;
-    })}</div>`;
-  }
-  function statusSeg(name, value) {
-    return h`<div class="seg" role="radiogroup">${["ACTIVE", "WAITING"].map(function (s) {
-      return h`<label class="seg-opt"><input type="radio" name="${name}" value="${s}" ${value === s ? "checked" : ""}><span>${MK.CASE_STATUS[s]}</span></label>`;
-    })}</div>`;
-  }
-  function deptSelect(name, value) {
-    return h`<select id="f_${name}" name="${name}"><option value="">ללא מחלקה</option>${Object.keys(MK.DEPARTMENTS).map(function (k) {
-      return h`<option value="${k}" ${value === k ? "selected" : ""}>${MK.DEPARTMENTS[k]}</option>`;
-    })}</select>`;
-  }
-  function contactSelect(name, value) {
-    var list = (App.state.db.contacts || []).slice().sort(function (a, b) { return a.fullName < b.fullName ? -1 : 1; });
-    return h`<select id="f_${name}" name="${name}"><option value="">ללא</option>${list.map(function (c) {
-      return h`<option value="${c.id}" ${value === c.id ? "selected" : ""}>${c.fullName}${c.profession ? " · " + c.profession : ""}</option>`;
-    })}</select>`;
-  }
-  function caseFieldsHtml(c) {
-    return h`
-      <div class="grid-2">
-        ${field("שם התיק / האברך", text("fullName", c.fullName, 'autocomplete="off" maxlength="120"'), { req: true, for: "f_fullName" })}
-        ${field("טלפון", h`<input type="tel" id="f_phone" name="phone" value="${c.phone || ""}" dir="ltr" style="text-align:right" maxlength="40">`, { for: "f_phone" })}
-        ${field("עיר", text("city", c.city, 'maxlength="80"'), { for: "f_city" })}
-        ${field("גורם מפנה", text("referredBy", c.referredBy, 'placeholder="גיס, מטפל, שכנים…" maxlength="200"'), { for: "f_referredBy" })}
-        ${field("מי מכיר את התיק / ראש חבורה", text("knownBy", c.knownBy, 'maxlength="200"'), { for: "f_knownBy" })}
-        ${field("תאריך פנייה ראשונה", dateInput("firstContactDate", c.firstContactDate), { for: "f_firstContactDate" })}
-      </div>
-      ${field("סיפור התיק", h`<textarea id="f_story" name="story" rows="4" placeholder="מה הסיפור, מה ידוע, מה עדיין לא ידוע">${c.story || ""}</textarea>`, { for: "f_story" })}
-      ${field("נושאי טיפול", tagChips(c.tagIds))}
-      <div class="row between" style="gap:16px">
-        ${c.status === "CLOSED" ? "" : field("סטטוס", statusSeg("status", c.status || "ACTIVE"))}
-        <label class="switch"><input type="checkbox" name="isUrgent" ${MK.bool(c.isUrgent) ? "checked" : ""}> תיק דחוף</label>
-      </div>`;
-  }
-  function readCase(form) {
-    return {
-      fullName: UI.val(form, "fullName"), phone: UI.val(form, "phone"), city: UI.val(form, "city"),
-      referredBy: UI.val(form, "referredBy"), knownBy: UI.val(form, "knownBy"),
-      firstContactDate: UI.val(form, "firstContactDate"), story: UI.val(form, "story"),
-      tagIds: UI.checkedValues(form, "tagIds"), isUrgent: UI.val(form, "isUrgent"),
-      status: UI.val(form, "status") || undefined
-    };
-  }
-  function foot(primary, extra) {
-    return h`<button type="submit" class="btn btn-primary">${primary}</button>
-      <button type="button" class="btn btn-ghost" data-close>ביטול</button>${extra || ""}`;
-  }
-  function caseName(task) {
-    var c = task && task.caseId ? MK.byId(App.state.db.cases, task.caseId) : null;
-    return c ? c.fullName : "";
+  var esc = UI.esc, icon = UI.icon, $ = UI.$, $$ = UI.$$;
+  function db() { return App.state.db; }
+  function val(dlg, name) { var el = $('[name="' + name + '"]', dlg); return el ? el.value : ""; }
+  function picked(dlg, name) { var el = $('[name="' + name + '"]:checked', dlg); return el ? el.value : ""; }
+  var SAVE = function (label, cls) { return '<button type="submit" class="btn ' + (cls || "btn-good") + '">' + icon("check") + (label || "שמירה") + '</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>'; };
+  function choice(name, value, title, sub, checked) {
+    return '<label class="choice"><input type="radio" name="' + name + '" value="' + value + '"' + (checked ? " checked" : "") + '><div><b>' + title + '</b><span>' + sub + '</span></div></label>';
   }
 
-  // ------------------------------------------------------------ cases
-  function newCase() {
-    var t = App.today();
-    UI.modal({
-      title: "תיק חדש", sub: "כל תיק נפתח יחד עם המשימה הראשונה שלו", wide: true,
-      body: h`<div class="stack">
-        ${caseFieldsHtml({ firstContactDate: t, status: "ACTIVE" })}
-        <div class="next-card" style="margin:6px 0 0">
-          <div class="label">${icon("flag")} המשימה הראשונה</div>
-          <div class="stack" style="margin-top:10px">
-            ${field("מה צריך לעשות", text("firstTitle", "", 'placeholder="למשל: שיחת היכרות ראשונה" maxlength="300"'), { req: true, for: "f_firstTitle" })}
-            ${field("תאריך יעד", datePicker("firstDue", t, true), { req: true })}
-          </div>
-        </div></div>`,
-      foot: foot("פתיחת התיק"),
-      onMount: wireDates,
-      onSubmit: async function (m) {
-        var res = await App.mutate("createCase", { case: readCase(m.form), firstTask: { title: UI.val(m.form, "firstTitle"), dueDate: UI.val(m.form, "firstDue") } });
-        if (!res.ok) return UI.showErrors(m.form, res, { taskTitle: "firstTitle", taskDue: "firstDue" });
-        m.close();
-        UI.toast("התיק נפתח");
-        App.go("#/case/" + encodeURIComponent(res.caseId));
-      }
-    });
-  }
-
-  function editCase(caseId) {
-    var c = MK.byId(App.state.db.cases, caseId);
-    if (!c) return;
-    UI.modal({
-      title: "עריכת תיק", sub: c.fullName, wide: true,
-      body: h`<div class="stack">${caseFieldsHtml(c)}</div>`,
-      foot: foot("שמירה"),
-      onSubmit: async function (m) {
-        var res = await App.mutate("updateCase", { id: caseId, case: readCase(m.form) }, "נשמר");
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
-      }
-    });
-  }
-
-  async function toggleUrgent(caseId) {
-    var c = MK.byId(App.state.db.cases, caseId);
-    if (!c) return;
-    var on = !MK.bool(c.isUrgent);
-    var res = await App.mutate("updateCase", { id: caseId, case: { isUrgent: on } }, on ? "התיק סומן כדחוף" : "הסימון 'דחוף' הוסר");
-    if (!res.ok) UI.toast(res.message || "השמירה נכשלה", true);
-  }
-
-  async function setStatus(caseId, status) {
-    var res = await App.mutate("updateCase", { id: caseId, case: { status: status } }, "הסטטוס עודכן ל" + MK.CASE_STATUS[status]);
-    if (!res.ok) UI.toast(res.message || "השמירה נכשלה", true);
-  }
-
-  function reopenCase(caseId) {
-    var c = MK.byId(App.state.db.cases, caseId);
-    if (!c) return;
-    var t = App.today();
-    UI.modal({
-      title: "פתיחת התיק מחדש", sub: c.fullName,
-      body: h`<div class="stack">
-        <p class="muted small">תיק פתוח חייב משימה פתוחה. מה הצעד הבא?</p>
-        ${field("המשימה הבאה", text("title", "", 'maxlength="300"'), { req: true, for: "f_title" })}
-        ${field("תאריך יעד", datePicker("dueDate", t, true), { req: true })}</div>`,
-      foot: foot("פתיחה מחדש"),
-      onMount: wireDates,
-      onSubmit: async function (m) {
-        var res = await App.mutate("reopenCase", { caseId: caseId, title: UI.val(m.form, "title"), dueDate: UI.val(m.form, "dueDate") }, "התיק נפתח מחדש");
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
-      }
-    });
-  }
-
-  // ------------------------------------------------------------ tasks
+  // ================================================================ close a task
   /**
-   * Closing a task. Case tasks: two steps in the same window -
-   *  A. what was done (mandatory report), B. what's next (next task OR close the case).
-   * Nothing is saved until the final step, so cancelling never leaves a task
-   * marked done without a follow-up. The server saves everything in one go.
+   *  mine / org: one tap, with "undo" on the toast.
+   *  people: did they do it? If not, when to check again (the follow-up comes back that day).
+   *  case: done / not done + details + what's next on the case (step, who, when), or no next step.
    */
-  function completeTask(taskId) {
-    var task = MK.byId(App.state.db.tasks, taskId);
-    if (!task || MK.bool(task.isDone)) return;
-    if (!task.caseId) return completeGeneral(task);
-    var c = MK.byId(App.state.db.cases, task.caseId);
-    var t = App.today();
-    var step = 1;
-    var m = UI.modal({
-      title: "סגירת משימה", sub: c ? c.fullName : "", wide: false,
-      body: h`
-        <div class="steps"><div class="step on" data-step="1"><i>1</i>מה בוצע</div><div class="step" data-step="2"><i>2</i>מה הלאה</div></div>
-        <div class="task-recap"><span class="muted small">המשימה:</span> <b>${task.title}</b></div>
-        <div class="stack" data-pane="1">
-          ${field("דיווח ביצוע", h`<textarea id="f_notes" name="notes" rows="5" placeholder="עם מי דיברת, מה נסגר, מה התקדם…" maxlength="5000"></textarea>`, { req: true, for: "f_notes", hint: "Ctrl+Enter להמשך" })}
-          ${(App.state.db.contacts || []).length ? field("איש קשר (לא חובה)", contactSelect("contactId", task.contactId), { for: "f_contactId" }) : ""}
-        </div>
-        <div class="stack" data-pane="2" hidden>
-          <div class="choice">
-            <label><input type="radio" name="what" value="next" checked><div><b>משימה הבאה</b><span>התיק ממשיך</span></div></label>
-            <label class="danger"><input type="radio" name="what" value="close"><div><b>סגירת התיק</b><span>הטיפול הסתיים</span></div></label>
-          </div>
-          <div class="stack" data-what="next">
-            ${field("מה הצעד הבא", text("nextTitle", "", 'maxlength="300" placeholder="למשל: לחזור אליו ולעדכן"'), { req: true, for: "f_nextTitle" })}
-            ${field("תאריך יעד", datePicker("nextDue", MK.addDays(t, 1)), { req: true })}
-          </div>
-          <div class="stack" data-what="close" hidden>
-            ${field("סיבת הסגירה", text("closeReason", "", 'maxlength="500" placeholder="בקצרה"'), { req: true, for: "f_closeReason" })}
-          </div>
-        </div>`,
-      foot: h``,
-      onMount: function (m) {
-        wireDates(m);
-        m.form.addEventListener("change", function (e) {
-          if (e.target.name !== "what") return;
-          var w = UI.val(m.form, "what");
-          m.$('[data-what="next"]').hidden = w !== "next";
-          m.$('[data-what="close"]').hidden = w !== "close";
-          setFoot();
-          var f = m.$(w === "next" ? "#f_nextTitle" : "#f_closeReason");
-          if (f) f.focus();
+  function complete(t) {
+    var k = MK.kindOf(t), today = App.today();
+    if (k === "mine" || k === "org") {
+      App.act("completeTask", { id: t.id, result: "done" }, "סומן כבוצע", function () { App.act("undoTask", { id: t.id }); });
+      return;
+    }
+    if (k === "people") {
+      UI.dialog({
+        title: "בדקתי עם " + t.who, sub: t.title,
+        body: (t.what ? '<div class="note">מחכה ל: ' + esc(t.what) + '</div>' : "") +
+          '<div class="choices">' + choice("res", "done", "זה בוצע", "המעקב נסגר", true) + choice("res", "notdone", "עוד לא", "לבדוק שוב בתאריך אחר") + '</div>' +
+          '<div class="field"><label for="f_note">מה נאמר (לא חובה)</label><textarea id="f_note" name="note" rows="3" placeholder="למשל: אמר שישלח עד יום חמישי"></textarea></div>' +
+          '<div class="field" data-again hidden><label>מתי לבדוק שוב</label>' + UI.dateChips("next", MK.addDays(today, 2), today) + '</div>',
+        foot: SAVE(),
+        onMount: function (dlg) {
+          UI.wireChips(dlg);
+          dlg.addEventListener("change", function (e) { if (e.target.name === "res") $("[data-again]", dlg).hidden = e.target.value !== "notdone"; });
+        },
+        onSubmit: async function (dlg) {
+          var again = picked(dlg, "res") === "notdone";
+          var res = await App.act("completeTask", { id: t.id, result: again ? "notdone" : "done", note: val(dlg, "note") || (again ? "עוד לא בוצע" : ""), next: again ? { due: val(dlg, "next") } : null });
+          if (!res.ok) return UI.fail(dlg, res);
+          UI.close();
+          UI.toast(again ? "נבדוק שוב עם " + t.who + " ב-" + MK.fmtDate(val(dlg, "next")) : "המעקב אחרי " + t.who + " נסגר", function () { App.act("undoTask", { id: t.id }); });
+        }
+      });
+      return;
+    }
+    var c = MK.byId(db().cases, t.caseId);
+    UI.dialog({
+      title: (t.owner ? "מעקב: " + t.owner : "טיפלתי") + (c ? " · " + c.name : ""), sub: t.title,
+      body: '<div class="field"><label>מה קרה</label><div class="choices">' + choice("res", "done", "בוצע", "המשימה נעשתה", true) + choice("res", "notdone", "לא בוצע", "נרשם בהיסטוריה כ\"לא בוצע\"") + '</div></div>' +
+        '<div class="field"><label for="f_note">פירוט (לא חובה)</label><textarea id="f_note" name="note" rows="3" placeholder="עם מי דיברת, מה התקדם, למה לא בוצע…"></textarea></div>' +
+        '<div class="field"><label>מה הלאה בתיק</label><div class="choices">' + choice("next", "yes", "יש צעד הבא", "מה, מי ומתי", true) + choice("next", "no", "אין צעד הבא כרגע", "בלי משימה חדשה") + '</div></div>' +
+        '<div class="kbox k-case" data-nextbox><div style="grid-column:1/-1"><label for="f_nt">הצעד הבא</label><input type="text" id="f_nt" name="nt" maxlength="300" placeholder="למשל: לחזור אליו ולעדכן"></div>' +
+          '<div><label for="f_no">מי מטפל</label><input type="text" id="f_no" name="no" list="peopleList" value="' + esc(t.owner) + '" placeholder="ריק = אני" maxlength="80" autocomplete="off"></div>' +
+          '<div><label>מתי</label>' + UI.dateChips("nd", MK.addDays(today, 1), today) + '</div></div>' + Pages.peopleList(),
+      foot: SAVE(),
+      onMount: function (dlg) {
+        UI.wireChips(dlg);
+        dlg.addEventListener("change", function (e) {
+          if (e.target.name === "next") $("[data-nextbox]", dlg).hidden = e.target.value !== "yes";
+          if (e.target.name === "res" && e.target.value === "notdone" && !val(dlg, "nt")) $("[name=nt]", dlg).value = t.title;
         });
       },
-      onSubmit: async function (m) {
-        if (step === 1) {
-          if (!MK.str(UI.val(m.form, "notes"))) return UI.showErrors(m.form, { fields: { notes: "יש לכתוב מה בוצע" } });
-          return goStep(2);
+      onSubmit: async function (dlg) {
+        var hasNext = picked(dlg, "next") === "yes", r = picked(dlg, "res");
+        if (hasNext && !MK.str(val(dlg, "nt"))) return UI.fail(dlg, "כתבו מה הצעד הבא", "[name=nt]");
+        var res = await App.act("completeTask", { id: t.id, result: r, note: val(dlg, "note"),
+          next: hasNext ? { title: val(dlg, "nt"), due: val(dlg, "nd"), owner: val(dlg, "no") } : null });
+        if (!res.ok) return UI.fail(dlg, res);
+        UI.close();
+        UI.toast((r === "done" ? "נרשם: בוצע" : "נרשם: לא בוצע") + (hasNext ? ". הצעד הבא נקבע ל" + MK.fmtDate(val(dlg, "nd")) : ""), function () { App.act("undoTask", { id: t.id }); });
+      }
+    });
+  }
+
+  function postpone(t) {
+    var today = App.today(), start = t.due < today ? MK.addDays(today, 1) : MK.addDays(t.due, 1);
+    UI.dialog({
+      title: "דחיית משימה", sub: t.title,
+      body: '<div class="field"><label>לאיזה תאריך</label>' + UI.dateChips("due", start, today, t.due < today) + '</div>' +
+        (MK.num(t.moved) ? '<p class="muted-p">כבר נדחתה ' + (MK.num(t.moved) === 1 ? "פעם אחת" : t.moved + " פעמים") + ' · במקור ל-' + MK.fmtDate(t.original) + '</p>' : ""),
+      foot: '<button type="submit" class="btn btn-primary">' + icon("clock") + 'דחייה</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>',
+      onMount: UI.wireChips,
+      onSubmit: async function (dlg) {
+        var d = val(dlg, "due");
+        var res = await App.act("postponeTask", { id: t.id, due: d });
+        if (!res.ok) return UI.fail(dlg, res);
+        UI.close();
+        UI.toast("נדחה ל" + (d === MK.addDays(today, 1) ? "מחר" : "תאריך " + MK.fmtDate(d)));
+      }
+    });
+  }
+
+  function editTask(t) {
+    var state = { kind: MK.kindOf(t), who: t.who, what: t.what, caseId: t.caseId, owner: t.owner, dept: t.dept };
+    function readKind(dlg) { $$("[data-kf] [data-f]", dlg).forEach(function (el) { state[el.dataset.f] = el.value; }); }
+    var o = t.openedAt || MK.todayYmd(t.createdAt);
+    UI.dialog({
+      title: "עריכת משימה", sub: "נפתחה לראשונה ב-" + MK.fmtDate(o) + (MK.num(t.steps) > 1 ? " · סבב " + t.steps : ""),
+      body: '<div class="field"><label for="f_title">מה צריך לעשות</label><input type="text" id="f_title" name="title" value="' + esc(t.title) + '" maxlength="300"></div>' +
+        '<div class="add-opts" role="group" aria-label="סוג המשימה"><span class="kind-label">סוג:</span>' +
+          MK.KIND_ORDER.map(function (k) { return '<button type="button" class="chip k-' + k + (state.kind === k ? " on" : "") + '" data-ek="' + k + '">' + icon(MK.KINDS[k].icon) + MK.KINDS[k].short + '</button>'; }).join("") + '</div>' +
+        '<div data-kf>' + Pages.kindFields(state.kind, state, "ed") + '</div>' + Pages.peopleList(),
+      foot: SAVE("שמירה", "btn-primary") + '<button type="button" class="btn btn-ghost" id="delBtn" style="margin-inline-start:auto;color:var(--bad)">' + icon("trash") + 'מחיקה</button>',
+      onMount: function (dlg) {
+        dlg.addEventListener("click", function (e) {
+          var b = e.target.closest("[data-ek]"); if (!b) return;
+          readKind(dlg); state.kind = b.dataset.ek;
+          $$("[data-ek]", dlg).forEach(function (c) { c.classList.toggle("on", c === b); });
+          $("[data-kf]", dlg).innerHTML = Pages.kindFields(state.kind, state, "ed");
+          var f = $("[data-kf] input, [data-kf] select", dlg); if (f) f.focus();
+        });
+        var del = $("#delBtn", dlg), armed = false;
+        del.addEventListener("click", async function () {
+          if (!armed) { armed = true; del.textContent = "ללחוץ שוב למחיקה"; return; }
+          var res = await App.act("deleteTask", { id: t.id });
+          if (!res.ok) return UI.fail(dlg, res);
+          UI.close(); UI.toast("המשימה נמחקה");
+        });
+      },
+      onSubmit: async function (dlg) {
+        readKind(dlg);
+        var res = await App.act("updateTask", { id: t.id, kind: state.kind, title: val(dlg, "title"), who: state.who, what: state.what, caseId: state.caseId, owner: state.owner, dept: state.dept });
+        if (!res.ok) return UI.fail(dlg, res);
+        UI.close(); UI.toast("נשמר");
+      }
+    });
+  }
+
+  // ================================================================ cases
+  function caseFields(c) {
+    var today = App.today();
+    var f = function (id, label, v, ph, wide, type) {
+      return '<div class="field' + (wide ? " span2" : "") + '"><label for="cf_' + id + '">' + label + '</label><input type="' + (type || "text") + '" id="cf_' + id + '" name="' + id + '" value="' + esc(v) + '" placeholder="' + (ph || "") + '" maxlength="300"' + (type === "tel" ? ' dir="ltr" style="text-align:right"' : "") + '></div>';
+    };
+    return '<div class="grid2">' + f("name", "שם התיק / האברך *", c.name) + f("city", "עיר", c.city) +
+      f("info", "נתונים חשובים", c.info, "בשורה אחת: מה הכי חשוב לדעת", true) +
+      f("referredBy", "מפנה", c.referredBy, "גיס, מטפל, שכנים…") + f("knownBy", "מכיר את התיק / ראש חבורה", c.knownBy) +
+      f("phone", "טלפון", c.phone, "", false, "tel") +
+      '<div class="field"><label for="cf_firstContact">תאריך פנייה ראשונה</label><input type="date" id="cf_firstContact" name="firstContact" value="' + (c.firstContact || today) + '" max="' + today + '"></div>' +
+      '<div class="field span2"><label for="cf_notes">הערות חשובות</label><textarea id="cf_notes" name="notes" rows="2">' + esc(c.notes) + '</textarea></div>' +
+      '<div class="field span2"><label for="cf_story">סיפור התיק</label><textarea id="cf_story" name="story" rows="4" placeholder="מה הסיפור, מה ידוע, מה עדיין לא ידוע">' + esc(c.story) + '</textarea></div></div>';
+  }
+  function readCase(dlg) {
+    var o = {};
+    ["name", "phone", "city", "info", "referredBy", "knownBy", "firstContact", "notes", "story"].forEach(function (k) { o[k] = val(dlg, k); });
+    return o;
+  }
+  function newCase() {
+    var today = App.today();
+    UI.dialog({
+      title: "תיק חדש", sub: "כל תיק נפתח יחד עם המשימה הראשונה שלו", wide: true,
+      body: caseFields({ firstContact: today }) +
+        '<div class="kbox k-case"><div style="grid-column:1/-1"><label for="f_ft">המשימה הראשונה *</label><input type="text" id="f_ft" name="ft" maxlength="300" placeholder="למשל: שיחת היכרות ראשונה"></div>' +
+        '<div><label for="f_fo">מי מטפל</label><input type="text" id="f_fo" name="fo" list="peopleList" placeholder="ריק = אני" maxlength="80" autocomplete="off"></div>' +
+        '<div><label>מתי</label>' + UI.dateChips("fd", today, today, true) + '</div></div>' + Pages.peopleList(),
+      foot: '<button type="submit" class="btn btn-primary">' + icon("plus") + 'פתיחת התיק</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>',
+      onMount: UI.wireChips,
+      onSubmit: async function (dlg) {
+        var res = await App.act("createCase", { "case": readCase(dlg), firstTask: { title: val(dlg, "ft"), owner: val(dlg, "fo"), due: val(dlg, "fd") } });
+        if (!res.ok) return UI.fail(dlg, res, res.fields && res.fields.name ? "[name=name]" : res.fields && res.fields.ftTitle ? "[name=ft]" : null);
+        UI.close();
+        App.go("#/case/" + encodeURIComponent(res.id));
+        UI.toast("התיק נפתח");
+      }
+    });
+  }
+  function editCase(c) {
+    UI.dialog({
+      title: "עריכת פרטי התיק", sub: c.name, wide: true, body: caseFields(c), foot: SAVE("שמירה", "btn-primary"),
+      onSubmit: async function (dlg) {
+        var res = await App.act("updateCase", { id: c.id, "case": readCase(dlg) });
+        if (!res.ok) return UI.fail(dlg, res);
+        UI.close(); UI.toast("הפרטים נשמרו");
+      }
+    });
+  }
+  function closeCase(c) {
+    var open = MK.caseTasks(db(), c.id).filter(function (t) { return !MK.isDone(t); }).length;
+    UI.dialog({
+      title: "סגירת התיק", sub: c.name,
+      body: '<div class="field"><label for="f_reason">סיבת הסגירה</label><input type="text" id="f_reason" name="reason" maxlength="300" placeholder="בקצרה"></div>' +
+        (open ? '<p class="muted-p">יש בתיק ' + open + ' משימות פתוחות. הן יירשמו כ"לא בוצע" ויוסרו מהיומן.</p>' : ""),
+      foot: '<button type="submit" class="btn btn-primary">סגירת התיק</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>',
+      onSubmit: async function (dlg) {
+        var res = await App.act("setCaseStatus", { id: c.id, status: "closed", reason: val(dlg, "reason") });
+        if (!res.ok) return UI.fail(dlg, res, "[name=reason]");
+        UI.close(); UI.toast("התיק נסגר");
+      }
+    });
+  }
+
+  // ================================================================ documents
+  function upload(c, preset) {
+    var max = (App.state.meta.maxUploadMb || MK.MAX_UPLOAD_MB), file = null;
+    UI.dialog({
+      title: "הוספת מסמך", sub: c.name,
+      body: '<label class="drop" id="drop" tabindex="0"><input type="file" id="f_file" hidden><b>בחירת קובץ</b>או לגרור לכאן · עד ' + max + 'MB · PDF, תמונה, Word וכל קובץ אחר</label>' +
+        '<div class="file-pick" id="picked" hidden></div>' +
+        '<div class="field"><label for="f_note">תיאור (לא חובה)</label><input type="text" id="f_note" name="note" maxlength="500" placeholder="למשל: טופס חתום, סיכום פגישה"></div>' +
+        (Api.isDemo() ? '<p class="muted-p">במצב הדגמה הקובץ עצמו לא נשמר, רק הרישום שלו.</p>' : '<p class="muted-p">הקובץ יישמר בגוגל דרייב, בתיקייה של התיק.</p>') +
+        '<div class="progress" id="prog" hidden><i></i></div>',
+      foot: '<button type="submit" class="btn btn-primary">' + icon("upload") + 'העלאה</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>',
+      onMount: function (dlg) {
+        var input = $("#f_file", dlg), drop = $("#drop", dlg);
+        function pick(f) {
+          if (!f) return;
+          if (f.size > max * 1024 * 1024) { file = null; return UI.fail(dlg, "הקובץ גדול מדי (עד " + max + "MB)"); }
+          file = f;
+          $(".d-body > .error", dlg).hidden = true;
+          var p = $("#picked", dlg);
+          p.innerHTML = '<div class="doc-ic">' + esc(UI.fileBadge(f.name, f.type)) + '</div><div class="doc-name">' + esc(f.name) + '<div class="doc-meta">' + MK.fileSize(f.size) + '</div></div>';
+          p.hidden = false;
+          $("#f_note", dlg).focus();
         }
-        var what = UI.val(m.form, "what");
-        var input = { taskId: taskId, notes: UI.val(m.form, "notes"), contactId: UI.val(m.form, "contactId") || "" };
-        if (what === "next") input.next = { title: UI.val(m.form, "nextTitle"), dueDate: UI.val(m.form, "nextDue") };
-        else input.closeCase = { reason: UI.val(m.form, "closeReason") };
-        var res = await App.mutate("completeTask", input);
-        if (!res.ok) {
-          if (res.fields && (res.fields.notes || res.fields.contactId)) goStep(1);
-          return UI.showErrors(m.form, res, { nextDue: "nextDue", nextTitle: "nextTitle", closeReason: "closeReason" });
-        }
-        m.close();
-        UI.toast(what === "next" ? "המשימה נסגרה, והמשימה הבאה נקבעה" : "המשימה בוצעה והתיק נסגר");
+        input.addEventListener("change", function () { pick(input.files[0]); });
+        drop.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+        ["dragover", "dragenter"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); }); });
+        ["dragleave", "drop"].forEach(function (ev) { drop.addEventListener(ev, function () { drop.classList.remove("over"); }); });
+        drop.addEventListener("drop", function (e) { e.preventDefault(); pick(e.dataTransfer.files[0]); });
+        if (preset) pick(preset);
+      },
+      onSubmit: async function (dlg) {
+        if (!file) return UI.fail(dlg, "בחרו קובץ");
+        $("#prog", dlg).hidden = false;
+        var data;
+        try { data = await UI.readBase64(file); } catch (e) { $("#prog", dlg).hidden = true; return UI.fail(dlg, "לא ניתן לקרוא את הקובץ"); }
+        var res = await App.call("uploadDocument", { caseId: c.id, name: file.name, mime: file.type, data: data, note: val(dlg, "note") });
+        $("#prog", dlg).hidden = true;
+        if (!res.ok) return UI.fail(dlg, res);
+        App.merge(res);
+        UI.close();
+        UI.toast(Api.isDemo() ? "המסמך נרשם (הדגמה)" : "המסמך נשמר בדרייב");
       }
     });
-    function setFoot() {
-      if (step === 1) {
-        m.setFoot(h`<button type="submit" class="btn btn-primary">המשך ${icon("chevron")}</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>`);
-      } else {
-        var close = UI.val(m.form, "what") === "close";
-        m.setFoot(h`<button type="submit" class="btn ${close ? "btn-danger" : "btn-good"}">${icon("check")} ${close ? "סגירת המשימה והתיק" : "שמירה"}</button>
-          <button type="button" class="btn btn-ghost" id="backStep">חזרה</button>`);
-        m.$("#backStep").onclick = function () { goStep(1); };
-      }
-    }
-    function goStep(n) {
-      step = n;
-      UI.clearErrors(m.form);
-      m.$('[data-pane="1"]').hidden = n !== 1;
-      m.$('[data-pane="2"]').hidden = n !== 2;
-      m.$('.step[data-step="1"]').className = "step " + (n === 1 ? "on" : "done");
-      m.$('.step[data-step="2"]').className = "step " + (n === 2 ? "on" : "");
-      setFoot();
-      m.$(n === 1 ? "#f_notes" : (UI.val(m.form, "what") === "close" ? "#f_closeReason" : "#f_nextTitle")).focus();
-    }
-    setFoot();
   }
-
-  function completeGeneral(task) {
-    UI.modal({
-      title: "סימון כבוצע", sub: task.project || (MK.DEPARTMENTS[task.department] || "משימה כללית"),
-      body: h`<div class="stack"><div class="task-recap"><b>${task.title}</b></div>
-        ${field("הערה (לא חובה)", h`<textarea id="f_notes" name="notes" rows="3" maxlength="5000"></textarea>`, { for: "f_notes" })}</div>`,
-      foot: h`<button type="submit" class="btn btn-good">${icon("check")} בוצע</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>`,
-      onSubmit: async function (m) {
-        var res = await App.mutate("completeTask", { taskId: task.id, notes: UI.val(m.form, "notes") }, "המשימה סומנה כבוצעה");
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
+  function removeDoc(d) {
+    UI.dialog({
+      title: "הסרת מסמך", sub: d.name,
+      body: '<p class="muted-p">המסמך יוסר מהתיק' + (d.fileId ? ', והקובץ יעבור לסל האשפה בגוגל דרייב (אפשר לשחזר משם 30 יום).' : ".") + '</p>',
+      foot: '<button type="submit" class="btn btn-primary" style="background:var(--bad)">' + icon("trash") + 'הסרה</button><button type="button" class="btn btn-ghost" data-close>ביטול</button>',
+      onSubmit: async function (dlg) {
+        var res = await App.act("removeDocument", { id: d.id });
+        if (!res.ok) return UI.fail(dlg, res);
+        UI.close(); UI.toast("המסמך הוסר");
       }
     });
   }
 
-  function postponeTask(taskId) {
-    var task = MK.byId(App.state.db.tasks, taskId);
-    if (!task) return;
-    var t = App.today();
-    var name = caseName(task);
-    UI.modal({
-      title: "דחיית משימה", sub: name || "משימה כללית",
-      body: h`<div class="stack">
-        <div class="task-recap"><b>${task.title}</b><div class="small muted" style="margin-top:4px">
-          תאריך נוכחי: ${MK.fmtDate(task.dueDate)}${MK.num(task.postponeCount) ? h` · נדחתה ${task.postponeCount} פעמים (במקור ${MK.fmtDate(task.originalDueDate)})` : ""}</div></div>
-        ${field("לאיזה תאריך", datePicker("dueDate", task.dueDate < t ? t : MK.addDays(task.dueDate, 1)), { req: true })}</div>`,
-      foot: foot("דחייה"),
-      onMount: wireDates,
-      onSubmit: async function (m) {
-        var res = await App.mutate("postponeTask", { taskId: taskId, dueDate: UI.val(m.form, "dueDate") });
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
-        UI.toast("המשימה נדחתה לתאריך " + MK.fmtDate(UI.val(m.form, "dueDate")));
-      }
-    });
-  }
-
-  function editTask(taskId) {
-    var task = MK.byId(App.state.db.tasks, taskId);
-    if (!task) return;
-    var general = !task.caseId;
-    UI.modal({
-      title: "עריכת משימה", sub: caseName(task) || "משימה כללית",
-      body: h`<div class="stack">
-        ${field("תיאור המשימה", text("title", task.title, 'maxlength="300"'), { req: true, for: "f_title" })}
-        ${general ? h`<div class="grid-2">${field("מחלקה", deptSelect("department", task.department), { for: "f_department" })}
-          ${field("פרויקט", text("project", task.project, 'list="projects" maxlength="120"'), { for: "f_project" })}</div>${projectList()}` : ""}
-        <p class="small muted">כדי לשנות תאריך משתמשים ב"דחייה", כדי שהשינוי יירשם.</p></div>`,
-      foot: foot("שמירה"),
-      onSubmit: async function (m) {
-        var input = { taskId: taskId, title: UI.val(m.form, "title") };
-        if (general) { input.department = UI.val(m.form, "department"); input.project = UI.val(m.form, "project"); }
-        var res = await App.mutate("updateTask", input, "נשמר");
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
-      }
-    });
-  }
-
-  function projectList() {
-    var names = { "קורס מדריכים": true };
-    (App.state.db.tasks || []).forEach(function (t) { if (t.project) names[t.project] = true; });
-    return h`<datalist id="projects">${Object.keys(names).map(function (n) { return h`<option value="${n}">`; })}</datalist>`;
-  }
-
-  function newGeneralTask() {
-    var t = App.today();
-    UI.modal({
-      title: "משימה כללית", sub: "משימה שלא שייכת לתיק (מחלקה, פרויקט, קורס…)",
-      body: h`<div class="stack">
-        ${field("מה צריך לעשות", text("title", "", 'maxlength="300"'), { req: true, for: "f_title" })}
-        ${field("תאריך יעד", datePicker("dueDate", t, true), { req: true })}
-        <div class="grid-2">${field("מחלקה", deptSelect("department", ""), { for: "f_department" })}
-          ${field("פרויקט", text("project", "", 'list="projects" maxlength="120" placeholder="לא חובה"'), { for: "f_project" })}</div>
-        ${projectList()}</div>`,
-      foot: foot("הוספה"),
-      onMount: wireDates,
-      onSubmit: async function (m) {
-        var res = await App.mutate("createGeneralTask", {
-          title: UI.val(m.form, "title"), dueDate: UI.val(m.form, "dueDate"),
-          department: UI.val(m.form, "department"), project: UI.val(m.form, "project")
-        }, "המשימה נוספה");
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
-      }
-    });
-  }
-
-  // ------------------------------------------------------------ settings
-  function editTag(tagId) {
-    var tag = tagId ? MK.byId(App.state.db.tags, tagId) : null;
-    UI.modal({
-      title: tag ? "עריכת תגית" : "תגית חדשה",
-      body: field("שם התגית", text("name", tag ? tag.name : "", 'maxlength="60"'), { req: true, for: "f_name" }),
-      foot: foot("שמירה"),
-      onSubmit: async function (m) {
-        var res = await App.mutate("saveTag", { id: tagId || "", name: UI.val(m.form, "name") }, "נשמר");
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
-      }
-    });
-  }
-
-  function editContact(contactId) {
-    var c = contactId ? MK.byId(App.state.db.contacts, contactId) : {};
-    UI.modal({
-      title: contactId ? "עריכת איש קשר" : "איש קשר מקצועי חדש",
-      body: h`<div class="stack"><div class="grid-2">
-        ${field("שם מלא", text("fullName", c.fullName, 'maxlength="120"'), { req: true, for: "f_fullName" })}
-        ${field("תחום", text("profession", c.profession, 'placeholder="מטפל, רב, יועץ…" maxlength="120"'), { for: "f_profession" })}
-        ${field("טלפון", h`<input type="tel" id="f_phone" name="phone" value="${c.phone || ""}" dir="ltr" style="text-align:right" maxlength="40">`, { for: "f_phone" })}</div>
-        ${field("הערות", h`<textarea id="f_notes" name="notes" rows="3" maxlength="2000">${c.notes || ""}</textarea>`, { for: "f_notes" })}</div>`,
-      foot: foot("שמירה"),
-      onSubmit: async function (m) {
-        var res = await App.mutate("saveContact", { id: contactId || "", fullName: UI.val(m.form, "fullName"), profession: UI.val(m.form, "profession"), phone: UI.val(m.form, "phone"), notes: UI.val(m.form, "notes") }, "נשמר");
-        if (!res.ok) return UI.showErrors(m.form, res);
-        m.close();
-      }
-    });
-  }
-
+  // ================================================================ account
   function changePassword() {
-    UI.modal({
+    UI.dialog({
       title: "שינוי סיסמה",
-      body: h`<div class="stack">
-        ${field("סיסמה נוכחית", h`<input type="password" id="f_current" name="current" autocomplete="current-password" dir="ltr">`, { req: true, for: "f_current" })}
-        ${field("סיסמה חדשה", h`<input type="password" id="f_password" name="password" autocomplete="new-password" dir="ltr">`, { req: true, for: "f_password", hint: "לפחות 10 תווים, גם אותיות וגם ספרות" })}
-        ${field("אימות סיסמה חדשה", h`<input type="password" id="f_password2" name="password2" autocomplete="new-password" dir="ltr">`, { req: true, for: "f_password2" })}</div>`,
-      foot: foot("שמירה"),
-      onSubmit: async function (m) {
-        var pw = UI.val(m.form, "password");
-        var weak = MK.passwordProblem(pw);
-        if (weak) return UI.showErrors(m.form, { fields: { password: weak } });
-        if (pw !== UI.val(m.form, "password2")) return UI.showErrors(m.form, { fields: { password2: "הסיסמאות לא זהות" } });
-        var res = await App.call("changePassword", { current: UI.val(m.form, "current"), password: pw });
-        if (!res.ok) return UI.showErrors(m.form, res.error === "bad_password" ? { fields: { current: res.message } } : res);
+      body: '<div class="field"><label for="f_cur">סיסמה נוכחית</label><input type="password" id="f_cur" name="current" autocomplete="current-password" dir="ltr"></div>' +
+        '<div class="field"><label for="f_pw">סיסמה חדשה</label><input type="password" id="f_pw" name="password" autocomplete="new-password" dir="ltr"><span class="muted-p">לפחות 10 תווים, גם אותיות וגם ספרות</span></div>' +
+        '<div class="field"><label for="f_pw2">אימות</label><input type="password" id="f_pw2" name="password2" autocomplete="new-password" dir="ltr"></div>',
+      foot: SAVE("שמירה", "btn-primary"),
+      onMount: function (dlg) { setTimeout(function () { $("#f_cur", dlg).focus(); }, 30); },
+      onSubmit: async function (dlg) {
+        var pw = val(dlg, "password"), weak = MK.passwordProblem(pw);
+        if (weak) return UI.fail(dlg, weak, "[name=password]");
+        if (pw !== val(dlg, "password2")) return UI.fail(dlg, "הסיסמאות לא זהות", "[name=password2]");
+        var res = await App.call("changePassword", { current: val(dlg, "current"), password: pw });
+        if (!res.ok) return UI.fail(dlg, res);
         App.setToken(res.token);
-        m.close();
-        UI.toast("הסיסמה עודכנה");
+        UI.close(); UI.toast("הסיסמה עודכנה");
       }
     });
   }
 
-  return { newCase: newCase, editCase: editCase, toggleUrgent: toggleUrgent, setStatus: setStatus, reopenCase: reopenCase,
-    completeTask: completeTask, postponeTask: postponeTask, editTask: editTask, newGeneralTask: newGeneralTask,
-    editTag: editTag, editContact: editContact, changePassword: changePassword };
+  return { complete: complete, postpone: postpone, editTask: editTask, newCase: newCase, editCase: editCase, closeCase: closeCase,
+    upload: upload, removeDoc: removeDoc, changePassword: changePassword };
 })();
