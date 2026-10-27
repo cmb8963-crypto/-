@@ -231,12 +231,16 @@
   async function tryLogin() {
     const hash = await sha256Hex(pwInput.value);
     gateErr.textContent = "בודק...";
-    const ok = await loadData(hash);
-    if (ok) {
+    const result = await loadData(hash);
+    if (result.ok) {
       authToken = hash;
       sessionStorage.setItem("dashToken", hash);
       gateErr.textContent = "";
       showDash();
+    } else if (result.reason === "network") {
+      gateErr.textContent = "שגיאת תקשורת - בדוק חיבור לאינטרנט ונסה שוב" + (result.message ? " (" + result.message + ")" : "");
+    } else if (result.reason === "config") {
+      gateErr.textContent = "הגשר לגיליון עדיין לא מוגדר - פנה לתמיכה";
     } else {
       gateErr.textContent = "סיסמה שגויה";
     }
@@ -263,28 +267,28 @@
       document.getElementById("loadState").style.display = "none";
       document.getElementById("errState").style.display = "block";
       document.getElementById("errState").textContent = "החיבור לגיליון עדיין לא הוגדר (API_URL ריק).";
-      return false;
+      return { ok: false, reason: "config" };
     }
 
     try {
       const res = await fetch(API_URL + "?action=list&token=" + encodeURIComponent(token));
       const data = await res.json();
       if (!data.ok) {
-        if (tokenOverride) return false; // wrong password during login - let tryLogin report it
+        if (tokenOverride) return { ok: false, reason: "unauthorized" };
         showGate("הפג תוקף - יש להתחבר שוב");
-        return false;
+        return { ok: false, reason: "unauthorized" };
       }
       allSessions = groupBySession(data.rows || []);
       document.getElementById("loadState").style.display = "none";
       document.getElementById("content").style.display = "block";
       document.getElementById("lastUpdated").textContent = "עודכן: " + new Date().toLocaleString("he-IL");
       render();
-      return true;
+      return { ok: true };
     } catch (err) {
       document.getElementById("loadState").style.display = "none";
       document.getElementById("errState").style.display = "block";
       document.getElementById("errState").textContent = "שגיאה בטעינת הנתונים: " + err.message;
-      return false;
+      return { ok: false, reason: "network", message: err.message };
     }
   }
 
