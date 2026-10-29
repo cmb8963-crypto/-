@@ -1781,7 +1781,8 @@ function importLegacy(spreadsheetId, force) {
   var clients = [], sessions = [], payments = [], charges = [], expenses = [];
   var codeToId = {}, nameToId = {};
 
-  function n(v) { return Core.num(String(v).replace(/[^\d.\-]/g, "")); }
+  function n(v) { return Core.num(String(v).replace(/(\d)[Oo]/g, "$10").replace(/[^\d.\-]/g, "")); }
+  var owedByName = {};
   function parseDmy(v) {
     var m = String(v || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (!m) return "";
@@ -1812,6 +1813,19 @@ function importLegacy(spreadsheetId, force) {
           var once = n(x[ci + 3]);
           if (once) charges.push({ id: "chl" + code, clientId: id, date: "", amount: once,
             reason: once < 0 ? "הנחה / פגישת מתנה (מהגיליון הקודם)" : "תשלום חד-פעמי (מהגיליון הקודם)" });
+        }
+      }
+      // --- the workbook's own summary: "הסכום שהיה אמור לשלם" per client (agreed prices live here)
+      if (row.indexOf("הסכום שהיה אמור לשלם") !== -1 && row.indexOf("שם לקוח") !== -1) {
+        var ni = row.indexOf("שם לקוח"), oi = row.indexOf("הסכום שהיה אמור לשלם");
+        var di = row.findIndex(function (h) { return /נשאר חוב|סכום החוב/.test(h); });
+        for (var q = r + 1; q < v.length; q++) {
+          var nm = String(v[q][ni] || "").trim(), ov = String(v[q][oi] || "").trim();
+          if (!nm || !ov || /#REF/.test(ov) || owedByName[nm] !== undefined) continue;
+          var dv = di >= 0 ? String(v[q][di] || "").trim() : "";
+          var flag = di >= 0 ? String(v[q][di + 1] || "").trim() : "";   // "לכתוב" / "לא"
+          // debt as the workbook states it: explicit debt cell, or "לא" (nothing owed) => 0
+          owedByName[nm] = { owed: n(ov), debt: dv !== "" && !/#REF/.test(dv) ? n(dv) : (flag === "לא" ? 0 : null) };
         }
       }
       // --- sessions log + payments log (side by side)
@@ -1871,35 +1885,35 @@ function importLegacy(spreadsheetId, force) {
   sessions = resolve(sessions);
   payments = resolve(payments);
 
-  // Package deals written as free-text notes ("3000 ש"ח ל 10 שעות", "1500 עבור 5 פגישות",
-  // "5 פגישות ב 1500", "1500 * 5") become real packages, flagged for review.
-  var packages = [];
+  // Agreed prices (packages, monthly deals) are not structured in the workbook; its summary
+  // tab holds the amount each client was supposed to pay. Where our per-session calculation
+  // differs, add one visible adjustment charge so balances match the workbook exactly.
+  var tmpDb = { clients: clients, sessions: sessions, payments: payments, charges: charges, packages: [], settings: [] };
+  var adjusted = [];
   clients.forEach(function (c) {
-    var t = String(c.notes || "");
-    if (!t || /(^|\|\s)אם |הצאתי/.test(t)) return;
-    var m, price, units, type = "session";
-    if ((m = t.match(/(\d{3,5})\s*(?:ש"ח|₪)?\s*(?:ל|עבור)\s*-?\s*(\d{1,2})\s*(שעות|פגישות)/))) { price = +m[1]; units = +m[2]; type = m[3] === "שעות" ? "hour" : "session"; }
-    else if ((m = t.match(/(\d{1,2})\s*(פגישות|שעות)\s*ב\s*-?\s*(\d{3,5})/))) { units = +m[1]; price = +m[3]; type = m[2] === "שעות" ? "hour" : "session"; }
-    else if ((m = t.match(/(\d{3,5})\s*\*\s*(\d{1,2})(?!\d)/))) { price = +m[1]; units = +m[2]; }
-    if (!price || !units) return;
-    var first = sessions.filter(function (x) { return x.clientId === c.id && x.date; }).map(function (x) { return x.date; }).sort()[0] || Core.ymd(new Date());
-    packages.push({ id: "pkl" + c.code, clientId: c.id, name: "סל " + units + " " + (type === "hour" ? "שעות" : "פגישות"), units: units, unitType: type,
-      price: price, startDate: first, notes: "נוצר אוטומטית מהערה בגיליון - לבדיקה", source: "legacy" });
-    c.pricingModel = "package";
+    var w = owedByName[String(c.name).trim()];
+    if (!w) return;
+    var acc = Core.clientAccount(tmpDb, c.id, new Date());
+    // target total charges: what was paid (per the payments log) + the debt the workbook states
+    var target = w.debt !== null ? acc.totalPaid + w.debt : w.owed;
+    var diff = Core.round2(target - acc.totalCharges);
+    if (Math.abs(diff) < 1) return;
+    charges.push({ id: "chadj" + c.code, clientId: c.id, date: "", amount: diff,
+      reason: "התאמה למחיר המוסכם / ליתרה בגיליון הקודם", source: "legacy" });
+    adjusted.push(c.name);
   });
 
   if (force) {
     ["clients", "sessions", "payments", "charges", "expenses", "packages"].forEach(function (t) {
-      writeTable(t, readTable(t).filter(function (r) { return r.source !== "legacy" && !/^(chl|exl|pkl)/.test(r.id); }));
+      writeTable(t, readTable(t).filter(function (r) { return r.source !== "legacy" && !/^(chl|chadj|exl|pkl)/.test(r.id); }));
     });
   }
   upsertRows("clients", clients);
   upsertRows("sessions", sessions);
   upsertRows("payments", payments);
   upsertRows("charges", charges);
-  upsertRows("packages", packages);
   upsertRows("expenses", expenses);
   upsertRows("settings", [{ id: "legacyImported", value: "true" }, { id: "legacySheetId", value: spreadsheetId }]);
   audit("admin", "import_legacy", clients.length + "/" + sessions.length + "/" + payments.length);
-  return { ok: true, clients: clients.length, sessions: sessions.length, payments: payments.length, charges: charges.length, expenses: expenses.length, packages: packages.length };
+  return { ok: true, clients: clients.length, sessions: sessions.length, payments: payments.length, charges: charges.length, expenses: expenses.length, adjusted: adjusted };
 }

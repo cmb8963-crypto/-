@@ -351,7 +351,7 @@ var App = (function () {
     var r = await call("importLegacy", { spreadsheetId: m[1], force: force });
     t.disabled = false;
     if (!r.ok) { UI.toast({ already_imported: "כבר יובא - אפשר לבחור ייבוא מחדש", demo: "לא זמין במצב הדגמה" }[r.error] || "הייבוא נכשל: " + (r.message || r.error), true); return; }
-    UI.toast("יובאו " + r.clients + " לקוחות, " + r.sessions + " פגישות, " + r.payments + " תשלומים, " + r.expenses + " הוצאות" + (r.packages ? ", " + r.packages + " סלים (מהערות - כדאי לבדוק)" : ""));
+    UI.toast("יובאו " + r.clients + " לקוחות, " + r.sessions + " פגישות, " + r.payments + " תשלומים, " + r.expenses + " הוצאות" + (r.adjusted && r.adjusted.length ? ". ל-" + r.adjusted.length + " לקוחות נוספה התאמה למחיר המוסכם בגיליון" : ""));
     await reload();
   };
   Actions.backupNow = async function () {
