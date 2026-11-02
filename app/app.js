@@ -167,6 +167,7 @@ var App = (function () {
     family: [["family/overview", "סקירה"], ["family/month", "חודש"], ["family/import", "ייבוא דוחות"], ["family/budget", "תקציב וקטגוריות"],
       ["family/rules", "חוקי סיווג"], ["family/loans", "משכנתאות והלוואות"]],
     diag: [],
+    newsletter: [],
     settings: [["settings", "הגדרות"], ["settings/security", "אבטחה ויומן פעולות"]]
   };
 

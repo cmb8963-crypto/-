@@ -605,6 +605,30 @@ var ADMIN_ACTIONS = {
     return { ok: true, url: backup() };
   },
 
+  // Mailing-list subscribers, read live from the sheet the /join page writes to.
+  // Uses the sheet set in settings, or finds the Drive file named "רשימת התפוצה".
+  newsletter: function (req) {
+    var st = Core.settingsOf(loadDb());
+    var id = String(st.newsletterSheetId || "").trim();
+    if (!id) {
+      var it = DriveApp.getFilesByName("רשימת התפוצה");
+      while (it.hasNext()) {
+        var f = it.next();
+        if (f.getMimeType() === MimeType.GOOGLE_SHEETS && !f.isTrashed()) { id = f.getId(); break; }
+      }
+    }
+    if (!id) return { ok: true, configured: false };
+    var ss = SpreadsheetApp.openById(id);
+    var sh = ss.getSheets()[0];
+    var vals = sh.getDataRange().getValues();
+    var tz = Session.getScriptTimeZone();
+    var rows = vals.map(function (r) {
+      return r.map(function (v) { return v instanceof Date ? Utilities.formatDate(v, tz, "yyyy-MM-dd'T'HH:mm") : String(v == null ? "" : v); });
+    }).filter(function (r) { return r.join("").trim(); });
+    audit("admin", "newsletter_view");
+    return { ok: true, configured: true, title: ss.getName(), url: ss.getUrl(), headers: rows[0] || [], rows: rows.slice(1).slice(-10000) };
+  },
+
   auditLog: function () {
     return { ok: true, rows: readTable("audit").slice(-200).reverse() };
   }

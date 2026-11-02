@@ -197,6 +197,14 @@ var DemoBackend = (function () {
         var s = { id: C.uid("se"), clientId: b.clientId, date: req.start || b.start, durationMin: b.durationMin, location: b.location, status: "planned", source: "booking", notes: b.note ? "הערת הלקוח: " + b.note : "" };
         d.sessions.push(s); b.status = "approved"; b.sessionId = s.id; save(d); return ok({ session: s });
       case "revokePortal": case "changeAdminPassword": case "backupNow": return ok({ token: "demo", url: "" });
+      case "newsletter":
+        var nl = [], names = ["ישראל דוגמה", "משה לדוגמה", "אברהם בדיקה", "יעקב ניסיון", "דוד לדוגמה", "שמואל דוגמה"];
+        for (var q = 0; q < 26; q++) {
+          var dd = new Date(Date.now() - (q * 9 + (q % 4)) * 864e5);
+          nl.push([C.ymdhm(dd), names[q % names.length] + " " + (q + 1), "subscriber" + (q + 1) + "@example.com", "כן", location.origin + "/join/"]);
+        }
+        nl.push([C.ymdhm(new Date()), "ישראל דוגמה", "israel@example.com", "כן", location.origin + "/join/"]);
+        return ok({ configured: true, title: "רשימת התפוצה (הדגמה)", url: "", headers: ["תאריך", "שם", "מייל", "אישור דיוור", "מקור"], rows: nl.reverse() });
       case "auditLog": return ok({ rows: [{ ts: new Date().toISOString(), who: "admin", action: "מצב הדגמה - אין יומן אמיתי" }] });
       case "importLegacy": return Promise.resolve({ ok: false, error: "demo" });
       // ---- portal
