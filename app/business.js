@@ -7,6 +7,11 @@
   var ui = { clientFilter: "active", clientSearch: "", clientSort: "name", sessMonth: "", sessStatus: "", payMonth: "", payMethod: "", paySearch: "", pnlYear: "", pnlMonth: "" };
 
   function unitLabel(t) { return t === "hour" ? "שעות" : "פגישות"; }
+  function rateText(c) {
+    var per = c.unitType === "hour" ? " לשעה" : " לפגישה";
+    return C.num(c.discount) > 0 ? C.fmtMoney(C.effectiveRate(c)) + per + " (" + C.fmtMoney(c.rate) + " פחות הנחה " + C.fmtMoney(c.discount) + ")"
+      : C.fmtMoney(c.rate) + per;
+  }
   function r2(n) { return C.round2(n); }
   function initials(name) { return String(name || "?").trim().charAt(0); }
 
@@ -146,7 +151,7 @@
         return h`<tr class="click ${flag}" data-href="#biz/client/${c.id}">
           <td><b>${c.name}</b>${c.status === "inactive" ? h` <span class="badge">לא פעיל</span>` : ""}${a.renewalAlert ? h` <span class="badge warn">חידוש סל</span>` : ""}${a.awaiting.length ? h` <span class="badge info">${a.awaiting.length} לאישור</span>` : ""}</td>
           <td>${c.referrer || ""}</td>
-          <td class="small">${pkg ? pkg.name : C.PRICING_MODELS[a.model] ? (a.model === "single" ? C.fmtMoney(c.rate) + (c.unitType === "hour" ? " לשעה" : " לפגישה") : C.PRICING_MODELS[a.model]) : ""}</td>
+          <td class="small">${pkg ? pkg.name : C.PRICING_MODELS[a.model] ? (a.model === "single" ? rateText(c) : C.PRICING_MODELS[a.model]) : ""}</td>
           <td class="n">${a.packages.length ? r2(a.unitsPurchased) : "—"}</td>
           <td class="n">${r2(a.consumedUnits)}</td>
           <td class="n">${a.packages.length ? h`<b class="${a.renewalAlert ? "t-bad" : ""}">${r2(a.unitsRemaining)}</b>` : "—"}</td>
@@ -202,7 +207,11 @@
         <label class="field"><span>סטטוס</span><select name="status">${UI.options([["active", "פעיל"], ["lead", "מתעניין"], ["inactive", "לא פעיל"]], c.status)}</select></label>
         <label class="field"><span>הסדר תשלום</span><select name="pricingModel">${UI.options(Object.keys(C.PRICING_MODELS).map(function (k) { return [k, C.PRICING_MODELS[k]]; }), c.pricingModel)}</select></label>
         <label class="field"><span>יחידת חיוב</span><select name="unitType">${UI.options([["session", "לפי פגישה"], ["hour", "לפי שעה"]], c.unitType)}</select></label>
-        <label class="field"><span>מחיר ליחידה (מעבר לסל) ₪</span><input type="number" name="rate" value="${c.rate}" min="0"></label>
+        <div class="field span-2" id="rateBox"><span>מחיר לפגישה בודדת / לשעה ₪ (מחוץ לסל)</span>
+          <div class="row"><div class="chips">${C.priceList(st).sessionPrices.map(function (v) { return h`<button type="button" class="chip ${C.num(c.rate) === v ? "active" : ""}" data-rate="${v}">${C.fmtMoney(v)}</button>`; })}</div>
+            <input type="number" name="rate" value="${c.rate}" min="0" style="width:130px" aria-label="מחיר אחר">
+            <span class="small muted">הנחה לכל פגישה ₪</span><input type="number" name="discount" value="${c.discount}" min="0" style="width:110px" placeholder="0" aria-label="הנחה לכל פגישה">
+            <b class="small" id="rateFinal"></b></div></div>
         <label class="field"><span>תשלום חודשי (בליווי חודשי) ₪</span><input type="number" name="monthlyFee" value="${c.monthlyFee}" min="0"></label>
         <label class="field"><span>שם התהליך (מוצג ללקוח)</span><input type="text" name="processName" value="${c.processName}" placeholder="למשל: תהליך אישי ועסקי"></label>
         <label class="field"><span>מילת זיהוי ביומן (אופציונלי)</span><input type="text" name="calendarKeyword" value="${c.calendarKeyword}" placeholder="אם השם ביומן שונה"></label>
@@ -211,9 +220,19 @@
       </div>`,
       foot: h`<button class="btn btn-primary" data-save>שמירה</button><button class="btn btn-outline" data-close>ביטול</button>`
     });
+    function rateFinal() {
+      var r = C.num(m.$("[name=rate]").value), dsc = C.num(m.$("[name=discount]").value);
+      m.$("#rateFinal").textContent = dsc > 0 ? "= " + C.fmtMoney(Math.max(0, r - dsc)) + " לפגישה אחרי הנחה" : "";
+      UI.$$("[data-rate]", m.el).forEach(function (b) { b.classList.toggle("active", +b.dataset.rate === r); });
+    }
+    UI.$$("[data-rate]", m.el).forEach(function (b) { b.addEventListener("click", function () { m.$("[name=rate]").value = b.dataset.rate; rateFinal(); }); });
+    m.$("[name=rate]").addEventListener("input", rateFinal);
+    m.$("[name=discount]").addEventListener("input", rateFinal);
+    rateFinal();
     m.$("[data-save]").addEventListener("click", async function () {
       var d = UI.formData(m.$("#clientFormBox"));
       if (!d.name) { UI.toast("יש להזין שם", true); return; }
+      if (C.num(d.discount) > C.num(d.rate) && C.num(d.rate) > 0) { UI.toast("ההנחה גדולה מהמחיר", true); return; }
       if (d.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)) { UI.toast("כתובת המייל אינה תקינה", true); return; }
       d.id = c.id || C.uid("cl");
       if (!c.id) d.createdAt = C.ymd(new Date());
@@ -257,7 +276,7 @@
       <div class="grid grid-4" style="margin-top:16px">
         <div class="tile ${a.renewalAlert ? "warn" : ""}"><div class="lbl">${pkg ? "נותרו בסל (" + pkg.name + ")" : "הסדר"}</div>
           <div class="val">${pkg ? h`${r2(pkg.remaining)} <small class="muted" style="font-size:14px">/ ${r2(pkg.units)} ${unitLabel(pkg.unitType)}</small>` : h`<span style="font-size:17px">${C.PRICING_MODELS[a.model]}</span>`}</div>
-          ${pkg ? UI.bar(pkg.units ? pkg.used / pkg.units : 0, a.renewalAlert ? "warn" : "") : h`<div class="hint">${a.model === "monthly" ? C.fmtMoney(c.monthlyFee) + " לחודש" : C.fmtMoney(c.rate) + (c.unitType === "hour" ? " לשעה" : " לפגישה")}</div>`}</div>
+          ${pkg ? UI.bar(pkg.units ? pkg.used / pkg.units : 0, a.renewalAlert ? "warn" : "") : h`<div class="hint">${a.model === "monthly" ? C.fmtMoney(c.monthlyFee) + " לחודש" : rateText(c)}</div>`}</div>
         <div class="tile ${a.balance > 0.5 ? "bad" : a.balance < -0.5 ? "good" : ""}"><div class="lbl">${a.balance < -0.5 ? "יתרת זכות" : "יתרת חוב"}</div><div class="val">${C.fmtMoney(Math.abs(a.balance))}</div>
           <div class="hint">לתשלום ${C.fmtMoney(a.totalCharges)} · שולם ${C.fmtMoney(a.totalPaid)}</div></div>
         <div class="tile"><div class="lbl">פגישות שהתקיימו</div><div class="val">${a.heldCount}</div><div class="hint">${a.hoursTotal} שעות · ${r2(a.consumedUnits)} יח' חיוב</div></div>
@@ -301,12 +320,12 @@
     return h`<div class="grid grid-2">
       <div class="card"><div class="card-title"><h3>סלי פגישות</h3><button class="btn btn-primary btn-sm" data-act="newPackage" data-client="${c.id}">+ סל חדש</button></div>
         ${a.packages.length ? a.packages.map(function (p) {
-          return h`<div class="pkg ${p.remaining <= 0 ? "done" : ""}"><div class="row between"><b>${p.name}</b><span class="small muted">${C.fmtDate(p.startDate)} · ${C.fmtMoney(p.price)}</span></div>
+          return h`<div class="pkg ${p.remaining <= 0 ? "done" : ""}"><div class="row between"><b>${p.name}</b><span class="small muted">${C.fmtDate(p.startDate)} · ${C.fmtMoney(p.price)}${p.discount > 0 ? " (אחרי הנחה " + C.fmtMoney(p.discount) + ")" : ""}</span></div>
             <div class="row between small" style="margin:6px 0"><span>נוצלו <b>${r2(p.used)}</b> מתוך ${r2(p.units)} ${unitLabel(p.unitType)}</span><span>נותרו <b class="${p.remaining <= C.num(App.settings().renewalThreshold) ? "t-bad" : ""}">${r2(p.remaining)}</b></span></div>
             ${UI.bar(p.units ? p.used / p.units : 0)}
             <div class="row" style="margin-top:6px"><button class="btn btn-ghost btn-xs" data-act="editPackage" data-id="${p.id}">עריכה</button><button class="btn btn-ghost btn-xs" data-act="delRow" data-table="packages" data-id="${p.id}">מחיקה</button></div></div>`;
         }) : h`<div class="empty">אין סלים. ${a.model === "single" ? "הלקוח מחויב לפי פגישה." : ""}</div>`}
-        ${a.overflowUnits > 0 && a.packages.length ? h`<p class="small muted" style="margin-top:8px">${r2(a.overflowUnits)} יח' מעבר לסלים חויבו לפי ${C.fmtMoney(c.rate)} ליחידה.</p>` : ""}
+        ${a.overflowUnits > 0 && a.packages.length ? h`<p class="small muted" style="margin-top:8px">${r2(a.overflowUnits)} יח' מעבר לסלים חויבו לפי ${C.fmtMoney(C.effectiveRate(c))} ליחידה.</p>` : ""}
         <div class="card-title" style="margin-top:18px"><h3>חיובים חד-פעמיים</h3><button class="btn btn-outline btn-sm" data-act="newCharge" data-client="${c.id}">+ חיוב חד-פעמי</button></div>
         ${(App.db.charges || []).filter(function (x) { return x.clientId === c.id; }).map(function (x) {
           return h`<div class="aitem"><span class="who">${C.fmtMoney(x.amount)}</span><span class="when">${x.reason} ${x.date ? "· " + C.fmtDate(x.date) : ""}</span>
@@ -386,7 +405,7 @@
       <dl class="kv">
         <dt>שם</dt><dd>${c.name}</dd><dt>מספר לקוח</dt><dd>${c.code || "—"}</dd><dt>טלפון</dt><dd class="ltr">${c.phone || "—"}</dd><dt>אימייל</dt><dd class="ltr">${c.email || "—"}</dd>
         <dt>גורם מפנה</dt><dd>${c.referrer || "—"}</dd><dt>הסדר תשלום</dt><dd>${C.PRICING_MODELS[c.pricingModel || "single"]}</dd>
-        <dt>מחיר ליחידה</dt><dd>${C.fmtMoney(c.rate)} ${c.unitType === "hour" ? "לשעה" : "לפגישה"}</dd>
+        <dt>מחיר ליחידה</dt><dd>${rateText(c)}</dd>
         ${c.pricingModel === "monthly" ? h`<dt>תשלום חודשי</dt><dd>${C.fmtMoney(c.monthlyFee)}</dd>` : ""}
         <dt>שם התהליך</dt><dd>${c.processName || "—"}</dd><dt>מילת זיהוי ביומן</dt><dd>${c.calendarKeyword || "—"}</dd>
         <dt>נוצר</dt><dd>${C.fmtDate(c.createdAt) || "—"}</dd>
@@ -617,33 +636,49 @@
   // ================================================================ packages / charges / payments
   function packageForm(clientId, p) {
     var c = App.client(clientId);
+    var presets = C.priceList(App.settings()).packages;
     p = p || { unitType: c.unitType || "session", startDate: C.ymd(new Date()) };
     var m = UI.modal({
-      title: p.id ? "עריכת סל" : "סל פגישות חדש - " + c.name,
-      body: h`${p.id ? "" : h`<div class="chips" style="margin-bottom:14px">${C.PACKAGE_PRESETS.map(function (x, i) {
-          return h`<button class="chip" data-preset="${i}">${x.name} · ${C.fmtMoney(x.price)}</button>`; })}<button class="chip" data-preset="custom">סל מותאם</button></div>`}
+      title: p.id ? "עריכת סל" : "מכירת סל - " + c.name,
+      body: h`${p.id ? "" : h`<div class="small muted" style="margin-bottom:6px">בחירה מהמחירון:</div><div class="chips" style="margin-bottom:14px">${presets.map(function (x, i) {
+          return h`<button type="button" class="chip" data-preset="${i}">${x.name || C.packageName(x.units, x.unitType)} · ${C.fmtMoney(x.price)}</button>`; })}<button type="button" class="chip" data-preset="custom">סל מותאם</button></div>`}
         <div class="form-grid" id="pkgBox">
           <label class="field span-2"><span>שם הסל</span><input type="text" name="name" value="${p.name}"></label>
           <label class="field"><span>כמות</span><input type="number" name="units" value="${p.units}" min="0" step="0.5"></label>
-          <label class="field"><span>יחידה</span><select name="unitType">${UI.options([["session", "פגישות"], ["hour", "שעות"]], p.unitType)}</select></label>
+          <label class="field"><span>יחידה</span><select name="unitType">${UI.options([["hour", "שעות"], ["session", "פגישות"]], p.unitType)}</select></label>
           <label class="field"><span>מחיר הסל ₪</span><input type="number" name="price" value="${p.price}" min="0"></label>
+          <label class="field"><span>הנחה ₪ (סכום שיורד מהמחיר)</span><input type="number" name="discount" value="${p.discount}" min="0" placeholder="0"></label>
+          <div class="span-2 aitem" id="pkgFinal"></div>
           <label class="field"><span>תאריך רכישה</span><input type="date" name="startDate" value="${p.startDate}"></label>
-          <label class="field span-2"><span>הערות</span><input type="text" name="notes" value="${p.notes}"></label>
+          <label class="field"><span>הערות</span><input type="text" name="notes" value="${p.notes}"></label>
         </div>`,
       foot: h`<button class="btn btn-primary" data-save>שמירה</button><button class="btn btn-outline" data-close>ביטול</button>`
     });
+    function final() {
+      var price = C.num(m.$("[name=price]").value), dsc = C.num(m.$("[name=discount]").value);
+      var units = C.num(m.$("[name=units]").value), unit = m.$("[name=unitType]").value;
+      var pay = Math.max(0, price - dsc);
+      UI.setHtml(m.$("#pkgFinal"), price ? h`<span>הלקוח צריך לשלם: <b style="font-size:17px">${C.fmtMoney(pay)}</b></span>
+        ${dsc > 0 ? h`<span class="when">(${C.fmtMoney(price)} פחות הנחה ${C.fmtMoney(dsc)})</span>` : ""}
+        ${units ? h`<span class="when">· ${C.fmtMoney(pay / units)} ל${unit === "hour" ? "שעה" : "פגישה"}</span>` : ""}` : h`<span class="when">יש לבחור סל מהמחירון או להזין מחיר</span>`);
+    }
     UI.$$("[data-preset]", m.el).forEach(function (b) {
       b.addEventListener("click", function () {
         UI.$$("[data-preset]", m.el).forEach(function (x) { x.classList.toggle("active", x === b); });
-        if (b.dataset.preset === "custom") { m.$("[name=name]").value = "סל מותאם"; m.$("[name=units]").focus(); return; }
-        var x = C.PACKAGE_PRESETS[+b.dataset.preset];
-        m.$("[name=name]").value = x.name; m.$("[name=units]").value = x.units; m.$("[name=unitType]").value = x.unitType; m.$("[name=price]").value = x.price;
+        if (b.dataset.preset === "custom") { m.$("[name=name]").value = "סל מותאם"; m.$("[name=units]").focus(); final(); return; }
+        var x = presets[+b.dataset.preset];
+        m.$("[name=name]").value = x.name || C.packageName(x.units, x.unitType); m.$("[name=units]").value = x.units;
+        m.$("[name=unitType]").value = x.unitType; m.$("[name=price]").value = x.price;
+        final();
       });
     });
+    UI.$$("#pkgBox input, #pkgBox select", m.el).forEach(function (el) { el.addEventListener("input", final); });
+    final();
     m.$("[data-save]").addEventListener("click", async function () {
       var d = UI.formData(m.$("#pkgBox"));
       if (!(C.num(d.units) > 0)) { UI.toast("יש להזין כמות", true); return; }
-      if (!d.name) d.name = "סל " + d.units + " " + unitLabel(d.unitType);
+      if (C.num(d.discount) > C.num(d.price)) { UI.toast("ההנחה גדולה ממחיר הסל", true); return; }
+      if (!d.name) d.name = C.packageName(d.units, d.unitType);
       d.id = p.id; d.clientId = clientId;
       m.close();
       await App.save("packages", [d]);

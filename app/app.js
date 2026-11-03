@@ -249,6 +249,14 @@ var App = (function () {
         </div>
         <div class="row" style="margin-top:14px"><button class="btn btn-primary" data-act="saveSettings" data-box="setGoals">שמירה</button></div>
       </div>
+      <div class="card" id="setPrices"><div class="card-title"><h3>מחירון</h3><span class="sub">מופיע ככפתורי בחירה בכרטיס הלקוח ובמכירת סל</span></div>
+        <label class="field"><span>מחירים לפגישה בודדת ₪ (מופרדים בפסיק)</span>
+          <input type="text" name="sessionPrices" value="${C.priceList(st).sessionPrices.join(", ")}" class="ltr" placeholder="350, 300"></label>
+        <div class="small muted" style="margin:14px 0 6px">סלים:</div>
+        <div id="pkgRows">${C.priceList(st).packages.map(pkgRow)}</div>
+        <div class="row" style="margin-top:8px"><button class="btn btn-outline btn-sm" data-act="addPkgRow">+ הוספת סל</button></div>
+        <div class="row" style="margin-top:14px"><button class="btn btn-primary" data-act="savePrices">שמירה</button></div>
+      </div>
       <div class="card" id="setGeneral"><div class="card-title"><h3>פרטים כלליים ומיילים</h3></div>
         <div class="form-grid">
           <label class="field"><span>שם המאמן (חתימה במיילים)</span><input type="text" name="coachName" value="${st.coachName}"></label>
@@ -318,6 +326,28 @@ var App = (function () {
     UI.$("#availRows").insertAdjacentHTML("beforeend", UI.fmt(availRow(null, locs.length ? locs : st.locations)));
   };
   Actions.delAvail = function (t) { t.closest(".avail-row").remove(); };
+  function pkgRow(x) {
+    x = x || { units: "", unitType: "hour", price: "" };
+    return h`<div class="row pkg-row" style="margin-bottom:8px">
+      <input type="number" name="units" value="${x.units}" min="0" step="0.5" placeholder="כמות" style="width:90px" aria-label="כמות">
+      <select name="unitType" style="width:110px" aria-label="יחידה">${UI.options([["hour", "שעות"], ["session", "פגישות"]], x.unitType)}</select>
+      <span class="small muted">ב-</span>
+      <input type="number" name="price" value="${x.price}" min="0" placeholder="מחיר ₪" style="width:120px" aria-label="מחיר">
+      <span class="small muted">₪</span>
+      <button class="btn btn-ghost btn-sm" data-act="delPkgRow" aria-label="הסרה">✕</button></div>`;
+  }
+  Actions.addPkgRow = function () { UI.$("#pkgRows").insertAdjacentHTML("beforeend", UI.fmt(pkgRow(null))); };
+  Actions.delPkgRow = function (t) { t.closest(".pkg-row").remove(); };
+  Actions.savePrices = async function () {
+    var box = UI.$("#setPrices");
+    var prices = String(box.querySelector("[name=sessionPrices]").value).split(/[,\s]+/).map(C.num).filter(function (v) { return v > 0; });
+    var pkgs = UI.$$(".pkg-row", box).map(function (r) {
+      var units = C.num(r.querySelector("[name=units]").value), unitType = r.querySelector("[name=unitType]").value;
+      return { name: C.packageName(units, unitType), units: units, unitType: unitType, price: C.num(r.querySelector("[name=price]").value) };
+    }).filter(function (x) { return x.units > 0 && x.price > 0; });
+    if (!prices.length) { UI.toast("יש להזין לפחות מחיר אחד לפגישה בודדת", true); return; }
+    await save("settings", [{ id: "sessionPrices", value: JSON.stringify(prices) }, { id: "packagePresets", value: JSON.stringify(pkgs) }], { msg: "המחירון נשמר" });
+  };
   Actions.saveBooking = async function () {
     var box = UI.$("#setBooking");
     var locs = String(box.querySelector("[name=locations]").value).split(",").map(function (s) { return s.trim(); }).filter(Boolean);
