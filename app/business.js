@@ -132,6 +132,7 @@
     var filters = [["active", "פעילים"], ["debt", "עם חוב"], ["renew", "לחידוש סל"], ["credit", "ביתרת זכות"], ["inactive", "לא פעילים"], ["all", "הכל"]];
     return h`<div class="page-head"><div><h1>לקוחות</h1><div class="sub">${rows.length} לקוחות מוצגים</div></div>
       <div class="row"><button class="btn btn-outline btn-sm" data-act="exportClients">ייצוא ל-Excel</button><button class="btn btn-primary btn-sm" data-act="newClient">+ לקוח חדש</button></div></div>
+    ${dupBanner()}
     <div class="toolbar">
       <input type="search" placeholder="חיפוש לפי שם, טלפון, מייל, גורם מפנה..." value="${ui.clientSearch}" data-input="clientSearch" aria-label="חיפוש לקוחות" id="clientSearch">
       <div class="chips">${filters.map(function (f) { return h`<button class="chip ${ui.clientFilter === f[0] ? "active" : ""}" data-act="clientFilter" data-f="${f[0]}">${f[1]}</button>`; })}</div>
@@ -156,6 +157,18 @@
       <tfoot><tr><td colspan="4">סה"כ</td><td class="n">${r2(tot.units)}</td><td></td><td class="n">${C.fmtMoney(tot.charges)}</td><td class="n">${C.fmtMoney(tot.paid)}</td><td class="n">${C.fmtMoney(tot.bal)}</td><td></td></tr></tfoot>
     </table></div>`;
   };
+  function dupBanner() {
+    var pairs = duplicatePairs();
+    if (!pairs.length) return "";
+    return h`<div class="card" style="margin-bottom:14px;border-color:#EED9B0;background:var(--warn-bg)">
+      <div class="card-title"><h3>נמצאו ${pairs.length} לקוחות שרשומים פעמיים</h3><span class="sub">אותו שם בשני כרטיסים - כדאי למזג</span></div>
+      <div class="alist">${pairs.map(function (p) {
+        return h`<div class="aitem"><span class="who">${p.keep.name}</span><span class="when">ו-</span><span class="who">${p.dup.name}</span>
+          <span class="when">${p.dup.source === "legacy" ? "(מהגיליון הקודם)" : ""}</span>
+          <span class="acts"><button class="btn btn-primary btn-xs" data-act="mergeClient" data-client="${p.dup.id}" data-target="${p.keep.id}">מיזוג</button>
+          <a class="btn btn-ghost btn-xs" href="#biz/client/${p.keep.id}">לכרטיס</a></span></div>`;
+      })}</div></div>`;
+  }
   Pages["biz/clients"].after = function () {
     var s = UI.$("#clientSearch");
     if (s && ui.focusSearch) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); ui.focusSearch = false; }
@@ -386,8 +399,194 @@
           ${C.bool(c.hasPassword) ? h`<button class="btn btn-bad btn-sm" data-act="revokePortal" data-client="${c.id}">ניתוק גישה</button>` : ""}
         </div>
         ${c.driveFolderId ? h`<div style="margin-top:14px"><a href="https://drive.google.com/drive/folders/${c.driveFolderId}" target="_blank" rel="noopener">📁 תיקיית הלקוח ב-Drive</a></div>` : ""}
+      </div>
+      <div class="card"><div class="card-title"><h3>לקוח כפול / מחיקה</h3></div>
+        <p class="small muted">אם הלקוח הזה רשום פעמיים, אפשר <b>למזג</b> אותו לתוך הכרטיס השני: כל הפגישות, התשלומים, הסלים, הסיכומים, המשימות וההודעות עוברים לכרטיס השני, והכרטיס הזה נמחק.</p>
+        <div class="row" style="margin-top:12px">
+          <button class="btn btn-outline btn-sm" data-act="mergeClient" data-client="${c.id}">⇄ מיזוג לתוך לקוח אחר</button>
+          <button class="btn btn-bad btn-sm" data-act="deleteClient" data-client="${c.id}">מחיקת הלקוח</button>
+        </div>
       </div></div>`;
   }
+
+  // Every table that points at a client.
+  var LINKED = [["sessions", "פגישות"], ["payments", "תשלומים"], ["packages", "סלים"], ["charges", "חיובים חד-פעמיים"],
+    ["summaries", "סיכומים"], ["tasks", "משימות"], ["messages", "הודעות"], ["bookings", "בקשות לפגישה"], ["email_log", "מיילים שנשלחו"]];
+  function linkedRows(clientId) {
+    var out = {};
+    LINKED.forEach(function (t) { out[t[0]] = (App.db[t[0]] || []).filter(function (r) { return r.clientId === clientId; }); });
+    return out;
+  }
+  function linkedSummary(rows) {
+    return LINKED.filter(function (t) { return rows[t[0]].length; }).map(function (t) { return rows[t[0]].length + " " + t[1]; }).join(", ");
+  }
+  // Two names are probably the same person when they share all name words (any order).
+  function sameNameWords(a, b) {
+    var wa = C.nameTokens(a).sort().join(" "), wb = C.nameTokens(b).sort().join(" ");
+    return wa && wa === wb;
+  }
+
+  var LIVE = { planned: true, held: true, cancel_late: true };
+  function day(s) { return String(s.date || "").slice(0, 10); }
+  function hasPrice(s) { return s.price !== undefined && s.price !== null && s.price !== ""; }
+
+  /*
+   * Plan a merge of src into tgt (nothing is written here).
+   *  - A src meeting on a day the kept card already has a meeting is the same meeting
+   *    recorded twice: the src copy is deleted. If src billed it (e.g. the old workbook),
+   *    the kept meeting takes that price, since it is the recorded history.
+   *  - Other src meetings move and keep exactly the amount src billed for them.
+   *  - A src payment with the same date and amount as a kept-card payment is a double.
+   */
+  function mergePlan(src, tgt) {
+    var db = App.db, rows = linkedRows(src.id);
+    var srcAcc = C.clientAccount(db, src.id);
+    var billed = {};
+    srcAcc.chargeLines.forEach(function (l) { if (l.sessionId) billed[l.sessionId] = l.amount; });
+    var tgtByDay = {};
+    (db.sessions || []).forEach(function (x) { if (x.clientId === tgt.id && LIVE[x.status] && x.date && !tgtByDay[day(x)]) tgtByDay[day(x)] = x; });
+    var ops = { delSessions: [], stamp: [], moveSessions: [], delPayments: [], movePayments: [] };
+    rows.sessions.forEach(function (x) {
+      var twin = LIVE[x.status] && x.date ? tgtByDay[day(x)] : null;
+      if (twin) {
+        ops.delSessions.push(x.id);
+        if (billed[x.id] > 0 && !hasPrice(twin)) ops.stamp.push({ id: twin.id, price: billed[x.id] });
+      } else {
+        var mv = { id: x.id, clientId: tgt.id };
+        if (billed[x.id] !== undefined && !hasPrice(x)) mv.price = billed[x.id];
+        ops.moveSessions.push(mv);
+      }
+    });
+    var tgtPays = {};
+    (db.payments || []).forEach(function (p) { if (p.clientId === tgt.id) tgtPays[p.date + "|" + C.num(p.amount)] = (tgtPays[p.date + "|" + C.num(p.amount)] || 0) + 1; });
+    rows.payments.forEach(function (p) {
+      var k = p.date + "|" + C.num(p.amount);
+      if (p.date && tgtPays[k]) { tgtPays[k]--; ops.delPayments.push(p.id); }
+      else ops.movePayments.push({ id: p.id, clientId: tgt.id });
+    });
+    // simulate the result for the preview
+    var del = {};
+    ops.delSessions.concat(ops.delPayments).forEach(function (id) { del[id] = true; });
+    var patch = {};
+    ops.stamp.concat(ops.moveSessions, ops.movePayments).forEach(function (o) { patch[o.id] = o; });
+    var sim = Object.assign({}, db);
+    LINKED.forEach(function (t) {
+      sim[t[0]] = (db[t[0]] || []).filter(function (r) { return !del[r.id]; }).map(function (r) {
+        var o = patch[r.id] ? Object.assign({}, r, patch[r.id]) : r;
+        return o.clientId === src.id ? Object.assign({}, o, { clientId: tgt.id }) : o;
+      });
+    });
+    var after = C.clientAccount(sim, tgt.id);
+    return { rows: rows, ops: ops, balance: after.balance, tgtBalance: C.clientAccount(db, tgt.id).balance, srcBalance: srcAcc.balance };
+  }
+
+  async function doMerge(src, tgt) {
+    var plan = mergePlan(src, tgt), ops = plan.ops;
+    UI.toast("ממזג...");
+    var patch = { id: tgt.id }, changed = false;
+    ["phone", "email", "referrer", "processName", "calendarKeyword", "code"].forEach(function (k) { if (!tgt[k] && src[k]) { patch[k] = src[k]; changed = true; } });
+    if (src.notes && String(tgt.notes || "").indexOf(src.notes) === -1) { patch.notes = (tgt.notes ? tgt.notes + " | " : "") + src.notes; changed = true; }
+    var opt = { toast: false, silent: true };
+    if (changed && !(await App.save("clients", [patch], opt))) return false;
+    if (ops.delSessions.length && !(await App.remove("sessions", ops.delSessions))) return false;
+    if (ops.delPayments.length && !(await App.remove("payments", ops.delPayments))) return false;
+    var sess = ops.stamp.concat(ops.moveSessions);
+    if (sess.length && !(await App.save("sessions", sess, opt))) return false;
+    if (ops.movePayments.length && !(await App.save("payments", ops.movePayments, opt))) return false;
+    for (var i = 0; i < LINKED.length; i++) {
+      var tbl = LINKED[i][0];
+      if (tbl === "email_log" || tbl === "sessions" || tbl === "payments") continue;   // e-mail log is read-only history
+      var moved = plan.rows[tbl].map(function (r) { return { id: r.id, clientId: tgt.id }; });
+      if (moved.length && !(await App.save(tbl, moved, opt))) return false;
+    }
+    return App.remove("clients", src.id);
+  }
+
+  function mergeModal(src, presetTarget) {
+    var others = (App.db.clients || []).filter(function (c) { return c.id !== src.id; })
+      .sort(function (a, b) { return (sameNameWords(b.name, src.name) - sameNameWords(a.name, src.name)) || String(a.name).localeCompare(String(b.name), "he"); });
+    var m = UI.modal({
+      title: "מיזוג \"" + src.name + "\" לתוך לקוח אחר",
+      body: h`<label class="field"><span>הכרטיס שנשאר (הכרטיס הנכון)</span>
+          <select id="mergeTarget">${UI.options(others.map(function (c) { return [c.id, c.name + (c.code ? " (#" + c.code + ")" : "") + (sameNameWords(c.name, src.name) ? "  ← אותו שם" : "")]; }), presetTarget || "", "בחירת לקוח...")}</select></label>
+        <div id="mergePreview" style="margin-top:12px"></div>
+        <p class="small muted" style="margin-top:10px">פרטים שחסרים בכרטיס שנשאר (טלפון, מייל, גורם מפנה) יילקחו מהכרטיס הזה, וההערות יתווספו. אחרי המיזוג הכרטיס "${src.name}" יימחק.</p>`,
+      foot: h`<button class="btn btn-primary" data-ok>מיזוג ומחיקת הכפול</button><button class="btn btn-outline" data-close>ביטול</button>`
+    });
+    function preview() {
+      var tid = m.$("#mergeTarget").value;
+      if (!tid) { UI.setHtml(m.$("#mergePreview"), ""); return; }
+      var p = mergePlan(src, App.client(tid));
+      UI.setHtml(m.$("#mergePreview"), h`<div class="alist">
+        <div class="aitem">יעבור לכרטיס שנבחר: <b>${linkedSummary(p.rows) || "אין נתונים מקושרים"}</b></div>
+        ${p.ops.delSessions.length ? h`<div class="aitem warn">${p.ops.delSessions.length} פגישות רשומות בשני הכרטיסים באותו תאריך - יישאר עותק אחד מכל פגישה.</div>` : ""}
+        ${p.ops.delPayments.length ? h`<div class="aitem warn">${p.ops.delPayments.length} תשלומים רשומים בשני הכרטיסים (אותו תאריך ואותו סכום) - יישאר עותק אחד.</div>` : ""}
+        <div class="aitem">יתרה אחרי המיזוג: <b>${UI.money(p.balance, true)}</b> <span class="when">(עכשיו בנפרד: ${C.fmtMoney(p.tgtBalance)} ו-${C.fmtMoney(p.srcBalance)})</span></div>
+        <div class="aitem"><span class="when">פגישות ישנות שומרות בדיוק את המחיר שבו חויבו. כדאי להציץ בכרטסת אחרי המיזוג.</span></div>
+      </div>`);
+    }
+    m.$("#mergeTarget").addEventListener("change", preview);
+    preview();
+    m.$("[data-ok]").addEventListener("click", async function () {
+      var tid = m.$("#mergeTarget").value;
+      if (!tid) { UI.toast("יש לבחור את הכרטיס שנשאר", true); return; }
+      var tgt = App.client(tid);
+      m.close();
+      if (await doMerge(src, tgt)) {
+        UI.toast("המיזוג הושלם - הכל נמצא עכשיו אצל " + tgt.name);
+        location.hash = "#biz/client/" + tgt.id;
+      }
+    });
+  }
+  Actions.mergeClient = function (t) { mergeModal(App.client(t.dataset.client), t.dataset.target); };
+
+  // Pairs of cards whose names have the same words (e.g. "אהרון גשטטנר" / "גשטטנר אהרון").
+  function duplicatePairs() {
+    var groups = {};
+    (App.db.clients || []).forEach(function (c) {
+      var k = C.nameTokens(c.name).sort().join(" ");
+      if (k) (groups[k] = groups[k] || []).push(c);
+    });
+    var out = [];
+    Object.keys(groups).forEach(function (k) {
+      var g = groups[k];
+      if (g.length < 2) return;
+      // keep the card that is not from the old import (it is the one linked to the calendar)
+      g.sort(function (a, b) { return (a.source === "legacy") - (b.source === "legacy"); });
+      for (var i = 1; i < g.length; i++) out.push({ keep: g[0], dup: g[i] });
+    });
+    return out;
+  }
+
+  Actions.deleteClient = async function (t) {
+    var c = App.client(t.dataset.client);
+    var rows = linkedRows(c.id);
+    var summary = linkedSummary(rows);
+    if (summary) {
+      var m = UI.modal({
+        title: "מחיקת " + c.name,
+        body: h`<div class="aitem bad">לכרטיס הזה מקושרים: <b>${summary}</b>.</div>
+          <p style="margin-top:10px">אם זה לקוח כפול - עדיף <b>מיזוג</b>, כדי שהנתונים לא ילכו לאיבוד.</p>
+          <p class="small muted" style="margin-top:8px">מחיקה תמחק את הכרטיס ואת כל הנתונים המקושרים אליו (פגישות ביומן Google לא יימחקו). כדי לאשר, הקלידו את שם הלקוח:</p>
+          <input type="text" id="delConfirm" placeholder="${c.name}" style="margin-top:6px">`,
+        foot: h`<button class="btn btn-primary" data-merge>מיזוג במקום</button><button class="btn btn-bad" data-del>מחיקה לצמיתות</button><button class="btn btn-outline" data-close>ביטול</button>`
+      });
+      m.$("[data-merge]").addEventListener("click", function () { m.close(); Actions.mergeClient(t); });
+      m.$("[data-del]").addEventListener("click", async function () {
+        if (m.$("#delConfirm").value.trim() !== String(c.name).trim()) { UI.toast("השם שהוקלד לא תואם", true); return; }
+        m.close();
+        for (var i = 0; i < LINKED.length; i++) {
+          var tbl = LINKED[i][0];
+          if (tbl === "email_log" || !rows[tbl].length) continue;
+          if (!(await App.remove(tbl, rows[tbl].map(function (r) { return r.id; })))) return;
+        }
+        if (await App.remove("clients", c.id)) location.hash = "#biz/clients";
+      });
+      return;
+    }
+    if (!(await UI.confirm("מחיקת לקוח", "למחוק את \"" + c.name + "\"? אין לו נתונים מקושרים.", "מחיקה", true))) return;
+    if (await App.remove("clients", c.id)) location.hash = "#biz/clients";
+  };
   Actions.revokePortal = async function (t) {
     if (!(await UI.confirm("ניתוק גישה", "הלקוח יתנתק מהאזור האישי והקישורים הקודמים יבוטלו. אפשר לשלוח הזמנה חדשה בהמשך.", "ניתוק", true))) return;
     var r = await App.call("revokePortal", { clientId: t.dataset.client });

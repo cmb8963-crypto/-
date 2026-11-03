@@ -244,8 +244,11 @@ var Core = (function () {
           price: num(p.price), startDate: p.startDate, notes: p.notes, used: 0, remaining: num(p.units), sessions: [] };
       });
 
-    var overflowUnits = 0, pi = 0, overflowSessions = [];
+    var overflowUnits = 0, pi = 0, overflowSessions = [], pricedSessions = [];
     consumed.forEach(function (s) {
+      // A session with its own fixed price (e.g. history kept when two cards are merged)
+      // is billed exactly that amount and does not use package units.
+      if (s.price !== undefined && s.price !== null && s.price !== "") { pricedSessions.push(s); return; }
       var assigned = false;
       while (pi < packages.length) {
         var p = packages[pi];
@@ -283,6 +286,10 @@ var Core = (function () {
           amount: round2(u * rate), kind: "session", sessionId: s.id });
       });
     }
+    pricedSessions.forEach(function (s) {
+      chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") + " (מחיר קבוע)",
+        amount: round2(num(s.price)), kind: "session", sessionId: s.id });
+    });
     (db.charges || []).forEach(function (c) {
       if (c.clientId === clientId) chargeLines.push({ date: c.date, label: c.reason || "תשלום חד-פעמי", amount: num(c.amount), kind: "oneoff", id: c.id });
     });
