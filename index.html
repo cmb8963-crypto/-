@@ -840,9 +840,22 @@
       email: regEmail.value.trim(),
     };
     trackEvent("start", { name: registrant.name, phone: registrant.phone, email: registrant.email });
+    submitNewsletterConsent(registrant.name, registrant.email);
     updateCardMailLink();
     startQuiz();
   });
+
+  // Reuses the /join page's own mailing-list endpoint so a signup here
+  // lands in the exact same sheet, same row format, as a regular /join
+  // subscription - no separate newsletter pipeline to maintain.
+  const JOIN_FORM_ENDPOINT = "https://script.google.com/macros/s/AKfycbzzs3resi5teRXvLgECQU9yFOIA0yWD4QS7p0Fd1CHluoI0cZklpDSTrb9WgHTITFZN/exec";
+  function submitNewsletterConsent(name, email) {
+    if (!JOIN_FORM_ENDPOINT) return;
+    try {
+      const body = new URLSearchParams({ name: name, email: email, consent: "yes", source: location.href, ts: new Date().toISOString() });
+      fetch(JOIN_FORM_ENDPOINT, { method: "POST", mode: "no-cors", body: body }).catch(function () {});
+    } catch (e) {}
+  }
 
   function updateCardMailLink() {
     const link = document.getElementById("cardMailLink");
