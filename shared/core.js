@@ -40,12 +40,14 @@ var Core = (function () {
 
   var UNIT_TYPES = { session: "פגישות", hour: "שעות" };
 
+  // Default price list (editable in Settings -> price list).
   var PACKAGE_PRESETS = [
-    { name: "סל 5 פגישות", units: 5, unitType: "session", price: 1500 },
-    { name: "סל 10 פגישות", units: 10, unitType: "session", price: 3000 },
+    { name: "סל 5 שעות", units: 5, unitType: "hour", price: 1500 },
     { name: "סל 10 שעות", units: 10, unitType: "hour", price: 3000 },
-    { name: "סל 15 פגישות", units: 15, unitType: "session", price: 4200 }
+    { name: "סל 5 פגישות", units: 5, unitType: "session", price: 1500 },
+    { name: "סל 10 פגישות", units: 10, unitType: "session", price: 3000 }
   ];
+  var SESSION_PRICES = [350, 300];
 
   var BUSINESS_EXPENSE_CATS = [
     "שכירות חדר / קליניקה",
@@ -135,7 +137,9 @@ var Core = (function () {
     reminderAfterDays: 10,
     autoReminders: false,
     shareRecordingsWithClient: true,
-    familyIncludeBusiness: true    // business net profit flows into the family budget
+    familyIncludeBusiness: true,   // business net profit flows into the family budget
+    packagePresets: "",            // price list: [{name, units, unitType, price}] (empty = defaults)
+    sessionPrices: ""              // price list: single-session prices, e.g. [350, 300]
   };
 
   // ---------------------------------------------------------------- utils
@@ -205,6 +209,20 @@ var Core = (function () {
     return out;
   }
 
+  // The editable price list: packages and single-session prices.
+  function priceList(st) {
+    var pk = st.packagePresets, sp = st.sessionPrices;
+    if (typeof pk === "string") { try { pk = JSON.parse(pk); } catch (e) { pk = null; } }
+    if (typeof sp === "string") { try { sp = JSON.parse(sp); } catch (e) { sp = null; } }
+    return {
+      packages: Array.isArray(pk) && pk.length ? pk : PACKAGE_PRESETS,
+      sessionPrices: Array.isArray(sp) && sp.length ? sp.map(num).filter(function (x) { return x > 0; }) : SESSION_PRICES
+    };
+  }
+  function packageName(units, unitType) { return "סל " + units + " " + (unitType === "hour" ? "שעות" : "פגישות"); }
+  // Price per session/hour after the client's fixed discount.
+  function effectiveRate(client) { return Math.max(0, num(client && client.rate) - num(client && client.discount)); }
+
   function monthlySessionTarget(st) {
     if (st.monthlySessionTarget !== "" && st.monthlySessionTarget != null && num(st.monthlySessionTarget) > 0) {
       return Math.round(num(st.monthlySessionTarget));
@@ -241,11 +259,15 @@ var Core = (function () {
       .sort(function (a, b) { return String(a.startDate || "").localeCompare(String(b.startDate || "")); })
       .map(function (p) {
         return { id: p.id, name: p.name, unitType: p.unitType || "session", units: num(p.units),
-          price: num(p.price), startDate: p.startDate, notes: p.notes, used: 0, remaining: num(p.units), sessions: [] };
+          price: Math.max(0, num(p.price) - num(p.discount)), listPrice: num(p.price), discount: num(p.discount),
+          startDate: p.startDate, notes: p.notes, used: 0, remaining: num(p.units), sessions: [] };
       });
 
-    var overflowUnits = 0, pi = 0, overflowSessions = [];
+    var overflowUnits = 0, pi = 0, overflowSessions = [], pricedSessions = [];
     consumed.forEach(function (s) {
+      // A session with its own fixed price (e.g. history kept when two cards are merged)
+      // is billed exactly that amount and does not use package units.
+      if (s.price !== undefined && s.price !== null && s.price !== "") { pricedSessions.push(s); return; }
       var assigned = false;
       while (pi < packages.length) {
         var p = packages[pi];
@@ -264,10 +286,12 @@ var Core = (function () {
     });
 
     var model = client.pricingModel || "single";
-    var rate = num(client.rate);
+    var rate = effectiveRate(client);
+    var discountNote = num(client.discount) > 0 ? " - כולל הנחה " + fmtMoney(client.discount) : "";
     var chargeLines = [];
     packages.forEach(function (p) {
-      chargeLines.push({ date: p.startDate, label: p.name || "סל", amount: p.price, kind: "package" });
+      chargeLines.push({ date: p.startDate, label: (p.name || "סל") + (p.discount > 0 ? " (" + fmtMoney(p.listPrice) + " פחות הנחה " + fmtMoney(p.discount) + ")" : ""),
+        amount: p.price, kind: "package" });
     });
     if (model === "monthly") {
       var months = {};
@@ -279,10 +303,14 @@ var Core = (function () {
       overflowSessions.forEach(function (s) {
         var u = sessionUnits(s, client);
         chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") +
-          (u !== 1 ? " (" + round2(u) + " " + (client.unitType === "hour" ? "שעות" : "יח'") + ")" : ""),
+          (u !== 1 ? " (" + round2(u) + " " + (client.unitType === "hour" ? "שעות" : "יח'") + ")" : "") + discountNote,
           amount: round2(u * rate), kind: "session", sessionId: s.id });
       });
     }
+    pricedSessions.forEach(function (s) {
+      chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") + " (מחיר קבוע)",
+        amount: round2(num(s.price)), kind: "session", sessionId: s.id });
+    });
     (db.charges || []).forEach(function (c) {
       if (c.clientId === clientId) chargeLines.push({ date: c.date, label: c.reason || "תשלום חד-פעמי", amount: num(c.amount), kind: "oneoff", id: c.id });
     });
@@ -610,7 +638,8 @@ var Core = (function () {
 
   return {
     SESSION_STATUS: SESSION_STATUS, CONSUMING: CONSUMING, PAY_METHODS: PAY_METHODS, PRICING_MODELS: PRICING_MODELS,
-    UNIT_TYPES: UNIT_TYPES, PACKAGE_PRESETS: PACKAGE_PRESETS, BUSINESS_EXPENSE_CATS: BUSINESS_EXPENSE_CATS,
+    UNIT_TYPES: UNIT_TYPES, PACKAGE_PRESETS: PACKAGE_PRESETS, SESSION_PRICES: SESSION_PRICES, priceList: priceList,
+    packageName: packageName, effectiveRate: effectiveRate, BUSINESS_EXPENSE_CATS: BUSINESS_EXPENSE_CATS,
     FAMILY_GROUPS: FAMILY_GROUPS, DEFAULT_FAMILY_CATEGORIES: DEFAULT_FAMILY_CATEGORIES, DEFAULT_FAMILY_RULES: DEFAULT_FAMILY_RULES,
     ACCOUNTS: ACCOUNTS, DEFAULT_SETTINGS: DEFAULT_SETTINGS, HE_MONTHS: HE_MONTHS, HE_DAYS: HE_DAYS,
     uid: uid, num: num, round2: round2, pad: pad, toDate: toDate, ymd: ymd, ymdhm: ymdhm, monthKey: monthKey,

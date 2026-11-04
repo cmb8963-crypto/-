@@ -44,12 +44,14 @@ var Core = (function () {
 
   var UNIT_TYPES = { session: "פגישות", hour: "שעות" };
 
+  // Default price list (editable in Settings -> price list).
   var PACKAGE_PRESETS = [
-    { name: "סל 5 פגישות", units: 5, unitType: "session", price: 1500 },
-    { name: "סל 10 פגישות", units: 10, unitType: "session", price: 3000 },
+    { name: "סל 5 שעות", units: 5, unitType: "hour", price: 1500 },
     { name: "סל 10 שעות", units: 10, unitType: "hour", price: 3000 },
-    { name: "סל 15 פגישות", units: 15, unitType: "session", price: 4200 }
+    { name: "סל 5 פגישות", units: 5, unitType: "session", price: 1500 },
+    { name: "סל 10 פגישות", units: 10, unitType: "session", price: 3000 }
   ];
+  var SESSION_PRICES = [350, 300];
 
   var BUSINESS_EXPENSE_CATS = [
     "שכירות חדר / קליניקה",
@@ -139,7 +141,9 @@ var Core = (function () {
     reminderAfterDays: 10,
     autoReminders: false,
     shareRecordingsWithClient: true,
-    familyIncludeBusiness: true    // business net profit flows into the family budget
+    familyIncludeBusiness: true,   // business net profit flows into the family budget
+    packagePresets: "",            // price list: [{name, units, unitType, price}] (empty = defaults)
+    sessionPrices: ""              // price list: single-session prices, e.g. [350, 300]
   };
 
   // ---------------------------------------------------------------- utils
@@ -209,6 +213,20 @@ var Core = (function () {
     return out;
   }
 
+  // The editable price list: packages and single-session prices.
+  function priceList(st) {
+    var pk = st.packagePresets, sp = st.sessionPrices;
+    if (typeof pk === "string") { try { pk = JSON.parse(pk); } catch (e) { pk = null; } }
+    if (typeof sp === "string") { try { sp = JSON.parse(sp); } catch (e) { sp = null; } }
+    return {
+      packages: Array.isArray(pk) && pk.length ? pk : PACKAGE_PRESETS,
+      sessionPrices: Array.isArray(sp) && sp.length ? sp.map(num).filter(function (x) { return x > 0; }) : SESSION_PRICES
+    };
+  }
+  function packageName(units, unitType) { return "סל " + units + " " + (unitType === "hour" ? "שעות" : "פגישות"); }
+  // Price per session/hour after the client's fixed discount.
+  function effectiveRate(client) { return Math.max(0, num(client && client.rate) - num(client && client.discount)); }
+
   function monthlySessionTarget(st) {
     if (st.monthlySessionTarget !== "" && st.monthlySessionTarget != null && num(st.monthlySessionTarget) > 0) {
       return Math.round(num(st.monthlySessionTarget));
@@ -245,11 +263,15 @@ var Core = (function () {
       .sort(function (a, b) { return String(a.startDate || "").localeCompare(String(b.startDate || "")); })
       .map(function (p) {
         return { id: p.id, name: p.name, unitType: p.unitType || "session", units: num(p.units),
-          price: num(p.price), startDate: p.startDate, notes: p.notes, used: 0, remaining: num(p.units), sessions: [] };
+          price: Math.max(0, num(p.price) - num(p.discount)), listPrice: num(p.price), discount: num(p.discount),
+          startDate: p.startDate, notes: p.notes, used: 0, remaining: num(p.units), sessions: [] };
       });
 
-    var overflowUnits = 0, pi = 0, overflowSessions = [];
+    var overflowUnits = 0, pi = 0, overflowSessions = [], pricedSessions = [];
     consumed.forEach(function (s) {
+      // A session with its own fixed price (e.g. history kept when two cards are merged)
+      // is billed exactly that amount and does not use package units.
+      if (s.price !== undefined && s.price !== null && s.price !== "") { pricedSessions.push(s); return; }
       var assigned = false;
       while (pi < packages.length) {
         var p = packages[pi];
@@ -268,10 +290,12 @@ var Core = (function () {
     });
 
     var model = client.pricingModel || "single";
-    var rate = num(client.rate);
+    var rate = effectiveRate(client);
+    var discountNote = num(client.discount) > 0 ? " - כולל הנחה " + fmtMoney(client.discount) : "";
     var chargeLines = [];
     packages.forEach(function (p) {
-      chargeLines.push({ date: p.startDate, label: p.name || "סל", amount: p.price, kind: "package" });
+      chargeLines.push({ date: p.startDate, label: (p.name || "סל") + (p.discount > 0 ? " (" + fmtMoney(p.listPrice) + " פחות הנחה " + fmtMoney(p.discount) + ")" : ""),
+        amount: p.price, kind: "package" });
     });
     if (model === "monthly") {
       var months = {};
@@ -283,10 +307,14 @@ var Core = (function () {
       overflowSessions.forEach(function (s) {
         var u = sessionUnits(s, client);
         chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") +
-          (u !== 1 ? " (" + round2(u) + " " + (client.unitType === "hour" ? "שעות" : "יח'") + ")" : ""),
+          (u !== 1 ? " (" + round2(u) + " " + (client.unitType === "hour" ? "שעות" : "יח'") + ")" : "") + discountNote,
           amount: round2(u * rate), kind: "session", sessionId: s.id });
       });
     }
+    pricedSessions.forEach(function (s) {
+      chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") + " (מחיר קבוע)",
+        amount: round2(num(s.price)), kind: "session", sessionId: s.id });
+    });
     (db.charges || []).forEach(function (c) {
       if (c.clientId === clientId) chargeLines.push({ date: c.date, label: c.reason || "תשלום חד-פעמי", amount: num(c.amount), kind: "oneoff", id: c.id });
     });
@@ -614,7 +642,8 @@ var Core = (function () {
 
   return {
     SESSION_STATUS: SESSION_STATUS, CONSUMING: CONSUMING, PAY_METHODS: PAY_METHODS, PRICING_MODELS: PRICING_MODELS,
-    UNIT_TYPES: UNIT_TYPES, PACKAGE_PRESETS: PACKAGE_PRESETS, BUSINESS_EXPENSE_CATS: BUSINESS_EXPENSE_CATS,
+    UNIT_TYPES: UNIT_TYPES, PACKAGE_PRESETS: PACKAGE_PRESETS, SESSION_PRICES: SESSION_PRICES, priceList: priceList,
+    packageName: packageName, effectiveRate: effectiveRate, BUSINESS_EXPENSE_CATS: BUSINESS_EXPENSE_CATS,
     FAMILY_GROUPS: FAMILY_GROUPS, DEFAULT_FAMILY_CATEGORIES: DEFAULT_FAMILY_CATEGORIES, DEFAULT_FAMILY_RULES: DEFAULT_FAMILY_RULES,
     ACCOUNTS: ACCOUNTS, DEFAULT_SETTINGS: DEFAULT_SETTINGS, HE_MONTHS: HE_MONTHS, HE_DAYS: HE_DAYS,
     uid: uid, num: num, round2: round2, pad: pad, toDate: toDate, ymd: ymd, ymdhm: ymdhm, monthKey: monthKey,
@@ -1472,6 +1501,30 @@ var ADMIN_ACTIONS = {
     return { ok: true, url: backup() };
   },
 
+  // Mailing-list subscribers, read live from the sheet the /join page writes to.
+  // Uses the sheet set in settings, or finds the Drive file named "רשימת התפוצה".
+  newsletter: function (req) {
+    var st = Core.settingsOf(loadDb());
+    var id = String(st.newsletterSheetId || "").trim();
+    if (!id) {
+      var it = DriveApp.getFilesByName("רשימת התפוצה");
+      while (it.hasNext()) {
+        var f = it.next();
+        if (f.getMimeType() === MimeType.GOOGLE_SHEETS && !f.isTrashed()) { id = f.getId(); break; }
+      }
+    }
+    if (!id) return { ok: true, configured: false };
+    var ss = SpreadsheetApp.openById(id);
+    var sh = ss.getSheets()[0];
+    var vals = sh.getDataRange().getValues();
+    var tz = Session.getScriptTimeZone();
+    var rows = vals.map(function (r) {
+      return r.map(function (v) { return v instanceof Date ? Utilities.formatDate(v, tz, "yyyy-MM-dd'T'HH:mm") : String(v == null ? "" : v); });
+    }).filter(function (r) { return r.join("").trim(); });
+    audit("admin", "newsletter_view");
+    return { ok: true, configured: true, title: ss.getName(), url: ss.getUrl(), headers: rows[0] || [], rows: rows.slice(1).slice(-10000) };
+  },
+
   auditLog: function () {
     return { ok: true, rows: readTable("audit").slice(-200).reverse() };
   }
@@ -1781,7 +1834,8 @@ function importLegacy(spreadsheetId, force) {
   var clients = [], sessions = [], payments = [], charges = [], expenses = [];
   var codeToId = {}, nameToId = {};
 
-  function n(v) { return Core.num(String(v).replace(/[^\d.\-]/g, "")); }
+  function n(v) { return Core.num(String(v).replace(/(\d)[Oo]/g, "$10").replace(/[^\d.\-]/g, "")); }
+  var owedByName = {};
   function parseDmy(v) {
     var m = String(v || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (!m) return "";
@@ -1812,6 +1866,19 @@ function importLegacy(spreadsheetId, force) {
           var once = n(x[ci + 3]);
           if (once) charges.push({ id: "chl" + code, clientId: id, date: "", amount: once,
             reason: once < 0 ? "הנחה / פגישת מתנה (מהגיליון הקודם)" : "תשלום חד-פעמי (מהגיליון הקודם)" });
+        }
+      }
+      // --- the workbook's own summary: "הסכום שהיה אמור לשלם" per client (agreed prices live here)
+      if (row.indexOf("הסכום שהיה אמור לשלם") !== -1 && row.indexOf("שם לקוח") !== -1) {
+        var ni = row.indexOf("שם לקוח"), oi = row.indexOf("הסכום שהיה אמור לשלם");
+        var di = row.findIndex(function (h) { return /נשאר חוב|סכום החוב/.test(h); });
+        for (var q = r + 1; q < v.length; q++) {
+          var nm = String(v[q][ni] || "").trim(), ov = String(v[q][oi] || "").trim();
+          if (!nm || !ov || /#REF/.test(ov) || owedByName[nm] !== undefined) continue;
+          var dv = di >= 0 ? String(v[q][di] || "").trim() : "";
+          var flag = di >= 0 ? String(v[q][di + 1] || "").trim() : "";   // "לכתוב" / "לא"
+          // debt as the workbook states it: explicit debt cell, or "לא" (nothing owed) => 0
+          owedByName[nm] = { owed: n(ov), debt: dv !== "" && !/#REF/.test(dv) ? n(dv) : (flag === "לא" ? 0 : null) };
         }
       }
       // --- sessions log + payments log (side by side)
@@ -1871,35 +1938,35 @@ function importLegacy(spreadsheetId, force) {
   sessions = resolve(sessions);
   payments = resolve(payments);
 
-  // Package deals written as free-text notes ("3000 ש"ח ל 10 שעות", "1500 עבור 5 פגישות",
-  // "5 פגישות ב 1500", "1500 * 5") become real packages, flagged for review.
-  var packages = [];
+  // Agreed prices (packages, monthly deals) are not structured in the workbook; its summary
+  // tab holds the amount each client was supposed to pay. Where our per-session calculation
+  // differs, add one visible adjustment charge so balances match the workbook exactly.
+  var tmpDb = { clients: clients, sessions: sessions, payments: payments, charges: charges, packages: [], settings: [] };
+  var adjusted = [];
   clients.forEach(function (c) {
-    var t = String(c.notes || "");
-    if (!t || /(^|\|\s)אם |הצאתי/.test(t)) return;
-    var m, price, units, type = "session";
-    if ((m = t.match(/(\d{3,5})\s*(?:ש"ח|₪)?\s*(?:ל|עבור)\s*-?\s*(\d{1,2})\s*(שעות|פגישות)/))) { price = +m[1]; units = +m[2]; type = m[3] === "שעות" ? "hour" : "session"; }
-    else if ((m = t.match(/(\d{1,2})\s*(פגישות|שעות)\s*ב\s*-?\s*(\d{3,5})/))) { units = +m[1]; price = +m[3]; type = m[2] === "שעות" ? "hour" : "session"; }
-    else if ((m = t.match(/(\d{3,5})\s*\*\s*(\d{1,2})(?!\d)/))) { price = +m[1]; units = +m[2]; }
-    if (!price || !units) return;
-    var first = sessions.filter(function (x) { return x.clientId === c.id && x.date; }).map(function (x) { return x.date; }).sort()[0] || Core.ymd(new Date());
-    packages.push({ id: "pkl" + c.code, clientId: c.id, name: "סל " + units + " " + (type === "hour" ? "שעות" : "פגישות"), units: units, unitType: type,
-      price: price, startDate: first, notes: "נוצר אוטומטית מהערה בגיליון - לבדיקה", source: "legacy" });
-    c.pricingModel = "package";
+    var w = owedByName[String(c.name).trim()];
+    if (!w) return;
+    var acc = Core.clientAccount(tmpDb, c.id, new Date());
+    // target total charges: what was paid (per the payments log) + the debt the workbook states
+    var target = w.debt !== null ? acc.totalPaid + w.debt : w.owed;
+    var diff = Core.round2(target - acc.totalCharges);
+    if (Math.abs(diff) < 1) return;
+    charges.push({ id: "chadj" + c.code, clientId: c.id, date: "", amount: diff,
+      reason: "התאמה למחיר המוסכם / ליתרה בגיליון הקודם", source: "legacy" });
+    adjusted.push(c.name);
   });
 
   if (force) {
     ["clients", "sessions", "payments", "charges", "expenses", "packages"].forEach(function (t) {
-      writeTable(t, readTable(t).filter(function (r) { return r.source !== "legacy" && !/^(chl|exl|pkl)/.test(r.id); }));
+      writeTable(t, readTable(t).filter(function (r) { return r.source !== "legacy" && !/^(chl|chadj|exl|pkl)/.test(r.id); }));
     });
   }
   upsertRows("clients", clients);
   upsertRows("sessions", sessions);
   upsertRows("payments", payments);
   upsertRows("charges", charges);
-  upsertRows("packages", packages);
   upsertRows("expenses", expenses);
   upsertRows("settings", [{ id: "legacyImported", value: "true" }, { id: "legacySheetId", value: spreadsheetId }]);
   audit("admin", "import_legacy", clients.length + "/" + sessions.length + "/" + payments.length);
-  return { ok: true, clients: clients.length, sessions: sessions.length, payments: payments.length, charges: charges.length, expenses: expenses.length, packages: packages.length };
+  return { ok: true, clients: clients.length, sessions: sessions.length, payments: payments.length, charges: charges.length, expenses: expenses.length, adjusted: adjusted };
 }
