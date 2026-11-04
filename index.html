@@ -852,7 +852,7 @@
   function submitNewsletterConsent(name, email) {
     if (!JOIN_FORM_ENDPOINT) return;
     try {
-      const body = new URLSearchParams({ name: name, email: email, consent: "yes", source: location.href, ts: new Date().toISOString() });
+      const body = new URLSearchParams({ name: name, email: email, consent: "yes", source: "אבחון", ts: new Date().toISOString() });
       fetch(JOIN_FORM_ENDPOINT, { method: "POST", mode: "no-cors", body: body }).catch(function () {});
     } catch (e) {}
   }
