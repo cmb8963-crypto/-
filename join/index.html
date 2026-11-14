@@ -267,7 +267,7 @@
 
     try {
       if (FORM_ENDPOINT) {
-        const body = new URLSearchParams({ name, email, consent: 'yes', source: location.href, ts: new Date().toISOString() });
+        const body = new URLSearchParams({ name, email, consent: 'yes', source: 'דף נחיתה', ts: new Date().toISOString() });
         await fetch(FORM_ENDPOINT, { method: 'POST', mode: 'no-cors', body });
       }
       hero.classList.add('is-done');

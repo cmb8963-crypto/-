@@ -163,6 +163,39 @@
     gap: 16px;
     margin-bottom: 26px;
   }
+  .consent-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .consent-box { flex: 1; min-width: 190px; }
+  .consent-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.55;
+    cursor: pointer;
+  }
+  .consent-label input[type="checkbox"] {
+    margin-top: 2px;
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+    accent-color: var(--gold-deep);
+    cursor: pointer;
+  }
+  .consent-err {
+    color: #B85C38;
+    font-size: 11.5px;
+    font-weight: 700;
+    margin-top: 6px;
+    min-height: 14px;
+  }
+  .consent-row .btn { flex-shrink: 0; }
   .field label {
     display: block;
     font-size: 13.5px;
@@ -530,7 +563,16 @@
             <div class="err">נא להזין כתובת מייל תקינה</div>
           </div>
         </div>
-        <button type="submit" class="btn btn-primary">המשך לשאלון</button>
+        <div class="consent-row">
+          <div class="consent-box">
+            <label class="consent-label">
+              <input type="checkbox" id="newsletterConsent">
+              <span>אשמח לקבל גם את הניוזלטר השבועי - תובנות קצרות לעסק שלי</span>
+            </label>
+            <div class="consent-err" id="consentErr"></div>
+          </div>
+          <button type="submit" class="btn btn-primary">המשך לשאלון</button>
+        </div>
       </form>
     </div>
   </div>
@@ -781,12 +823,16 @@
     const nameValid = regName.value.trim().length > 0;
     const phoneValid = isValidPhone(regPhone.value);
     const emailValid = isValidEmail(regEmail.value);
+    const consentEl = document.getElementById("newsletterConsent");
+    const consentErrEl = document.getElementById("consentErr");
+    const consentValid = consentEl.checked;
 
     setFieldValid("field-name", nameValid);
     setFieldValid("field-phone", phoneValid);
     setFieldValid("field-email", emailValid);
+    consentErrEl.textContent = consentValid ? "" : "כמעט שם - רק נשאר לאשר את קבלת הניוזלטר כדי להמשיך 🙂";
 
-    if (!(nameValid && phoneValid && emailValid)) return;
+    if (!(nameValid && phoneValid && emailValid && consentValid)) return;
 
     registrant = {
       name: regName.value.trim(),
@@ -794,9 +840,22 @@
       email: regEmail.value.trim(),
     };
     trackEvent("start", { name: registrant.name, phone: registrant.phone, email: registrant.email });
+    submitNewsletterConsent(registrant.name, registrant.email);
     updateCardMailLink();
     startQuiz();
   });
+
+  // Reuses the /join page's own mailing-list endpoint so a signup here
+  // lands in the exact same sheet, same row format, as a regular /join
+  // subscription - no separate newsletter pipeline to maintain.
+  const JOIN_FORM_ENDPOINT = "https://script.google.com/macros/s/AKfycbzzs3resi5teRXvLgECQU9yFOIA0yWD4QS7p0Fd1CHluoI0cZklpDSTrb9WgHTITFZN/exec";
+  function submitNewsletterConsent(name, email) {
+    if (!JOIN_FORM_ENDPOINT) return;
+    try {
+      const body = new URLSearchParams({ name: name, email: email, consent: "yes", source: "אבחון", ts: new Date().toISOString() });
+      fetch(JOIN_FORM_ENDPOINT, { method: "POST", mode: "no-cors", body: body }).catch(function () {});
+    } catch (e) {}
+  }
 
   function updateCardMailLink() {
     const link = document.getElementById("cardMailLink");
