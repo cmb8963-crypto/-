@@ -117,7 +117,7 @@
     var q = ui.clientSearch.trim().toLowerCase();
     var rows = Object.keys(accs).map(function (id) { return accs[id]; }).filter(function (a) {
       var c = a.client;
-      if (ui.clientFilter === "active" && c.status === "inactive") return false;
+      if (ui.clientFilter === "active" && c.status === "inactive" && !q) return false;   // a search also finds inactive cards
       if (ui.clientFilter === "inactive" && c.status !== "inactive") return false;
       if (ui.clientFilter === "debt" && !(a.balance > 0.5)) return false;
       if (ui.clientFilter === "credit" && !(a.balance < -0.5)) return false;
@@ -505,6 +505,7 @@
     var patch = { id: tgt.id }, changed = false;
     ["phone", "email", "referrer", "processName", "calendarKeyword", "code"].forEach(function (k) { if (!tgt[k] && src[k]) { patch[k] = src[k]; changed = true; } });
     if (src.notes && String(tgt.notes || "").indexOf(src.notes) === -1) { patch.notes = (tgt.notes ? tgt.notes + " | " : "") + src.notes; changed = true; }
+    if (tgt.status === "inactive" && src.status !== "inactive") { patch.status = src.status || "active"; changed = true; }
     var opt = { toast: false, silent: true };
     if (changed && !(await App.save("clients", [patch], opt))) return false;
     if (ops.delSessions.length && !(await App.remove("sessions", ops.delSessions))) return false;
@@ -815,7 +816,7 @@
       return true;
     }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
     var bm = ui.sessMonth !== "all" ? C.businessMonth(db, ui.sessMonth) : null;
-    var clients = (db.clients || []).filter(function (c) { return c.status !== "inactive"; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name), "he"); });
+    var clients = (db.clients || []).slice().sort(function (a, b) { return ((a.status === "inactive") - (b.status === "inactive")) || String(a.name).localeCompare(String(b.name), "he"); });
     return h`<div class="page-head"><div><h1>יומן פגישות</h1><div class="sub">מסונכרן עם Google Calendar${App.meta.lastSync ? " · עודכן " + C.fmtDate(App.meta.lastSync) + " " + C.fmtTime(App.meta.lastSync) : ""}</div></div>
       <div class="row"><button class="btn btn-outline btn-sm" data-act="syncCal">⟳ סנכרון עכשיו</button><button class="btn btn-primary btn-sm" data-act="newSession">+ פגישה</button></div></div>
     ${awaiting.length ? h`<div class="card"><div class="card-title"><h3>ממתינות לאישור סטטוס (${awaiting.length})</h3><span class="sub">אחרי שהפגישה עברה - לסמן מה קרה. "התקיימה" ו"בוטלה באיחור" מורידות יחידה מהסל או מוסיפות חיוב.</span></div>
@@ -823,7 +824,7 @@
     ${unassigned.length ? h`<div class="card section"><div class="card-title"><h3>אירועי יומן שלא זוהו (${unassigned.length})</h3><span class="sub">בחרו לקוח לשיוך, או הסתירו אירוע שאינו פגישה</span></div>
       <div class="alist">${unassigned.map(function (s) {
         return h`<div class="aitem"><span class="who">${s.calendarTitle || "(ללא כותרת)"}</span><span class="when">${UI.when(s.date)}</span>
-          <span class="acts"><select data-change="assignSession" data-id="${s.id}" style="width:auto;min-height:32px;padding:4px 8px;font-size:13px">${UI.options(clients.map(function (c) { return [c.id, c.name]; }), "", "שיוך ללקוח...")}</select>
+          <span class="acts"><select data-change="assignSession" data-id="${s.id}" style="width:auto;min-height:32px;padding:4px 8px;font-size:13px">${UI.options(clients.map(function (c) { return [c.id, c.name + (c.status === "inactive" ? " (לא פעיל)" : "")]; }), "", "שיוך ללקוח...")}</select>
           <button class="btn btn-ghost btn-xs" data-act="ignoreSession" data-id="${s.id}">הסתרה</button></span></div>`;
       })}</div></div>` : ""}
     <div class="card section">
@@ -838,7 +839,10 @@
     if (!t.value) return;
     var s = C.byId(App.db.sessions, t.dataset.id);
     var nowStr = C.ymdhm(new Date());
+    var c = App.client(t.value);
     App.save("sessions", [{ id: s.id, clientId: t.value, status: "planned", clientLocked: "true" }], { msg: "שויך" + (s.date < nowStr ? " - כעת אפשר לאשר את הסטטוס" : "") });
+    // a new meeting means the client is back: active again, so future meetings are recognised automatically
+    if (c && c.status === "inactive") App.save("clients", [{ id: c.id, status: "active" }], { msg: c.name + " סומן שוב כלקוח פעיל" });
   };
   Actions.ignoreSession = function (t) { App.save("sessions", [{ id: t.dataset.id, status: "ignored" }], { toast: false }); };
 
