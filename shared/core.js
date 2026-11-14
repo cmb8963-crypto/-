@@ -615,19 +615,37 @@ var Core = (function () {
     return String(name || "").replace(/[-–(),.'"]/g, " ").split(/\s+/)
       .filter(function (w) { return w.length >= 2 && ["זוגי", "בחור", "הרצאה"].indexOf(w) === -1; });
   }
-  // Match a calendar event title to a client (all name tokens present, or custom keyword).
+  // Hebrew spelling variants count as the same word: "וורצברגר" = "ורצברגר", "יי" = "י".
+  function normWord(w) {
+    return String(w || "").replace(/[\u0591-\u05C7"'׳״]/g, "").replace(/וו/g, "ו").replace(/יי/g, "י").toLowerCase();
+  }
+  function titleWords(t) {
+    return String(t || "").replace(/[-–(),.:;!?\/\\|]/g, " ").split(/\s+/).filter(Boolean).map(normWord);
+  }
+  /*
+   * Match a calendar event title to a client: every word of the client's name must
+   * appear as a whole word in the title (so "לוי" does not match inside "וואלוי"),
+   * or the client's own calendar keyword appears. If two clients match equally
+   * well, nobody is chosen - the event waits for a manual pick.
+   */
   function matchClient(clients, title) {
-    var t = String(title || "");
-    var best = null, bestScore = 0;
+    var t = String(title || ""), words = titleWords(t);
+    var best = null, bestScore = 0, tie = false;
     (clients || []).forEach(function (c) {
       if (c.status === "inactive") return;
-      if (c.calendarKeyword && t.indexOf(c.calendarKeyword) !== -1) { if (100 > bestScore) { best = c; bestScore = 100; } return; }
-      var toks = nameTokens(c.name);
-      if (!toks.length) return;
-      var hits = toks.filter(function (w) { return t.indexOf(w) !== -1; }).length;
-      if (hits === toks.length && hits > bestScore) { best = c; bestScore = hits; }
+      var score = 0;
+      if (c.calendarKeyword && t.indexOf(c.calendarKeyword) !== -1) score = 1000 + String(c.calendarKeyword).length;
+      else {
+        var toks = nameTokens(c.name).map(normWord);
+        if (!toks.length) return;
+        var all = toks.every(function (w) { return words.indexOf(w) !== -1; });
+        if (!all) return;
+        score = toks.length * 100 + toks.join("").length;
+      }
+      if (score > bestScore) { best = c; bestScore = score; tie = false; }
+      else if (score === bestScore && best && best.id !== c.id) tie = true;
     });
-    return best;
+    return tie ? null : best;
   }
 
   function escapeHtml(s) {

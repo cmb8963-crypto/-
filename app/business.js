@@ -785,6 +785,7 @@
       if (!d.date) { UI.toast("יש לבחור מועד", true); return; }
       d.id = s.id;
       if (isNew) d.source = "manual";
+      else if (d.clientId !== s.clientId) d.clientLocked = "true";   // chosen by hand: the calendar sync keeps it
       var createEvents = d.addToCalendar === "true";
       if (!createEvents) delete d.addToCalendar;
       m.close();
@@ -837,7 +838,7 @@
     if (!t.value) return;
     var s = C.byId(App.db.sessions, t.dataset.id);
     var nowStr = C.ymdhm(new Date());
-    App.save("sessions", [{ id: s.id, clientId: t.value, status: "planned" }], { msg: "שויך" + (s.date < nowStr ? " - כעת אפשר לאשר את הסטטוס" : "") });
+    App.save("sessions", [{ id: s.id, clientId: t.value, status: "planned", clientLocked: "true" }], { msg: "שויך" + (s.date < nowStr ? " - כעת אפשר לאשר את הסטטוס" : "") });
   };
   Actions.ignoreSession = function (t) { App.save("sessions", [{ id: t.dataset.id, status: "ignored" }], { toast: false }); };
 

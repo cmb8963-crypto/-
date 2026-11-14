@@ -711,10 +711,18 @@ function syncCalendar() {
     var loc = ev.getLocation() || "";
     if (s) {
       if (s.status === "planned" || s.status === "unassigned") {
+        var ch = null;
         if (s.date !== start || String(s.durationMin) !== String(dur) || (loc && s.location !== loc) || s.calendarEventId !== key) {
-          changes.push({ id: s.id, date: start, durationMin: dur, location: loc || s.location, calendarEventId: key, calendarTitle: title });
-          updated++;
+          ch = { id: s.id, date: start, durationMin: dur, location: loc || s.location, calendarEventId: key, calendarTitle: title };
         }
+        // Undo assignments made by the old matcher's bug (part of a word counted as a
+        // name, e.g. "לוי" inside "וואלוי"): only when the old rule explains the current
+        // client and the new rule finds a different one. Manual choices are never touched.
+        if (s.source === "calendar" && !Core.bool(s.clientLocked) && s.clientId) {
+          var m = Core.matchClient(d.clients, title), old = oldSubstringMatch(d.clients, title);
+          if (m && old && old.id === s.clientId && m.id !== s.clientId) { ch = ch || { id: s.id }; ch.clientId = m.id; ch.status = "planned"; }
+        }
+        if (ch) { changes.push(ch); updated++; }
       }
       return;
     }
@@ -737,6 +745,21 @@ function syncCalendar() {
   if (changes.length) upsertRows("sessions", changes);
   PropertiesService.getScriptProperties().setProperty("LAST_SYNC", Core.ymdhm(new Date()));
   return { ok: true, added: added, updated: updated, cancelled: cancelled, unmatched: unmatched };
+}
+
+// The matching rule used before November 2026 (substring based). Kept only to recognise
+// which existing assignments it produced, so they can be corrected safely.
+function oldSubstringMatch(clients, title) {
+  var t = String(title || ""), best = null, bestScore = 0;
+  (clients || []).forEach(function (c) {
+    if (c.status === "inactive") return;
+    if (c.calendarKeyword && t.indexOf(c.calendarKeyword) !== -1) { if (100 > bestScore) { best = c; bestScore = 100; } return; }
+    var toks = Core.nameTokens(c.name);
+    if (!toks.length) return;
+    var hits = toks.filter(function (w) { return t.indexOf(w) !== -1; }).length;
+    if (hits === toks.length && hits > bestScore) { best = c; bestScore = hits; }
+  });
+  return best;
 }
 
 var STATUS_COLOR = { held: "10", cancel_ontime: "8", cancel_late: "11", planned: "" }; // green, gray, red
