@@ -294,10 +294,9 @@ var Core = (function () {
         amount: p.price, kind: "package" });
     });
     if (model === "monthly") {
-      var months = {};
-      overflowSessions.forEach(function (s) { if (s.date) months[monthKey(s.date)] = true; });
-      Object.keys(months).sort().forEach(function (mk) {
-        chargeLines.push({ date: mk + "-01", label: "ליווי חודשי - " + monthLabel(mk), amount: num(client.monthlyFee), kind: "monthly" });
+      monthlyMonths(client, overflowSessions, now).forEach(function (mk) {
+        chargeLines.push({ date: mk + "-01", label: "ליווי חודשי - " + monthLabel(mk) + " (1-" + daysInMonth(mk) + " בחודש)",
+          amount: num(client.monthlyFee), kind: "monthly" });
       });
     } else {
       overflowSessions.forEach(function (s) {
@@ -366,6 +365,25 @@ var Core = (function () {
       awaiting: awaiting,
       lastHeld: held.length ? held[held.length - 1] : null
     };
+  }
+
+  /*
+   * Months billed on the monthly model: a fixed fee for every calendar month (the 1st
+   * to the last day) from the start month to the end month, or to the current month
+   * while the accompaniment is ongoing. Without a start month, it starts at the first
+   * meeting. A meeting outside that period still counts its own month.
+   */
+  function monthlyMonths(client, sessions, now) {
+    var months = {};
+    (sessions || []).forEach(function (s) { if (s.date) months[monthKey(s.date)] = true; });
+    var first = Object.keys(months).sort()[0] || "";
+    var start = /^\d{4}-\d{2}/.test(client.monthlyStart || "") ? String(client.monthlyStart).slice(0, 7) : first;
+    var end = thisMonth(now || new Date());
+    if (/^\d{4}-\d{2}/.test(client.monthlyEnd || "") && String(client.monthlyEnd).slice(0, 7) < end) end = String(client.monthlyEnd).slice(0, 7);
+    // an inactive client with no end month set is not charged after the last meeting
+    if (client.status === "inactive" && !client.monthlyEnd) { var last = Object.keys(months).sort().pop() || start; if (last < end) end = last; }
+    if (start) for (var mk = start, guard = 0; mk <= end && guard < 600; mk = addMonths(mk, 1), guard++) months[mk] = true;
+    return Object.keys(months).sort();
   }
 
   function allAccounts(db, now) {
@@ -664,7 +682,7 @@ var Core = (function () {
     thisMonth: thisMonth, addMonths: addMonths, daysInMonth: daysInMonth, fmtDate: fmtDate, fmtTime: fmtTime,
     fmtMoney: fmtMoney, monthLabel: monthLabel, byId: byId, bool: bool, settingsOf: settingsOf,
     monthlySessionTarget: monthlySessionTarget, sessionUnits: sessionUnits, sessionsOf: sessionsOf,
-    clientAccount: clientAccount, allAccounts: allAccounts, expensesForMonth: expensesForMonth,
+    clientAccount: clientAccount, allAccounts: allAccounts, monthlyMonths: monthlyMonths, expensesForMonth: expensesForMonth,
     businessMonth: businessMonth, kpi: kpi, categorize: categorize, familyMonth: familyMonth,
     loansSummary: loansSummary, txFingerprint: txFingerprint, freeSlots: freeSlots, hmToMin: hmToMin,
     minToHm: minToHm, portalView: portalView, nameTokens: nameTokens, matchClient: matchClient, escapeHtml: escapeHtml

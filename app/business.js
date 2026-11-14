@@ -216,7 +216,9 @@
             <input type="number" name="rate" value="${c.rate}" min="0" style="width:130px" aria-label="מחיר אחר">
             <span class="small muted">הנחה לכל פגישה ₪</span><input type="number" name="discount" value="${c.discount}" min="0" style="width:110px" placeholder="0" aria-label="הנחה לכל פגישה">
             <b class="small" id="rateFinal"></b></div></div>
-        <label class="field"><span>תשלום חודשי (בליווי חודשי) ₪</span><input type="number" name="monthlyFee" value="${c.monthlyFee}" min="0"></label>
+        <label class="field monthly-only"><span>תשלום חודשי קבוע ₪</span><input type="number" name="monthlyFee" value="${c.monthlyFee}" min="0"></label>
+        <label class="field monthly-only"><span>חודש התחלה</span><input type="month" name="monthlyStart" value="${String(c.monthlyStart || "").slice(0, 7) || (c.id ? "" : C.thisMonth())}"></label>
+        <label class="field monthly-only"><span>חודש סיום (ריק = הליווי נמשך)</span><input type="month" name="monthlyEnd" value="${String(c.monthlyEnd || "").slice(0, 7)}"></label>
         <label class="field"><span>שם התהליך (מוצג ללקוח)</span><input type="text" name="processName" value="${c.processName}" placeholder="למשל: תהליך אישי ועסקי"></label>
         <label class="field"><span>מילת זיהוי ביומן (אופציונלי)</span><input type="text" name="calendarKeyword" value="${c.calendarKeyword}" placeholder="אם השם ביומן שונה"></label>
         <label class="field span-2"><span>הערות פנימיות (לא מוצגות ללקוח)</span><textarea name="notes">${c.notes}</textarea></label>
@@ -244,6 +246,12 @@
     m.$("[name=rate]").addEventListener("input", rateFinal);
     m.$("[name=discount]").addEventListener("input", rateFinal);
     rateFinal();
+    function monthlyView() {
+      var on = m.$("[name=pricingModel]").value === "monthly";
+      UI.$$(".monthly-only", m.el).forEach(function (el) { el.style.display = on ? "" : "none"; });
+    }
+    m.$("[name=pricingModel]").addEventListener("change", monthlyView);
+    monthlyView();
     function pkgView() {
       if (!offerPkg) return;
       var isPkg = m.$("[name=pricingModel]").value === "package";
@@ -289,6 +297,8 @@
       if (!d.name) { UI.toast("יש להזין שם", true); return; }
       if (C.num(d.discount) > C.num(d.rate) && C.num(d.rate) > 0) { UI.toast("ההנחה גדולה מהמחיר", true); return; }
       if (d.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)) { UI.toast("כתובת המייל אינה תקינה", true); return; }
+      if (d.pricingModel === "monthly" && !(C.num(d.monthlyFee) > 0)) { UI.toast("יש להזין את התשלום החודשי", true); return; }
+      if (d.monthlyStart && d.monthlyEnd && d.monthlyEnd < d.monthlyStart) { UI.toast("חודש הסיום לפני חודש ההתחלה", true); return; }
       d.id = c.id || C.uid("cl");
       if (!c.id) d.createdAt = C.ymd(new Date());
       m.close();
@@ -465,7 +475,8 @@
         <dt>שם</dt><dd>${c.name}</dd><dt>מספר לקוח</dt><dd>${c.code || "—"}</dd><dt>טלפון</dt><dd class="ltr">${c.phone || "—"}</dd><dt>אימייל</dt><dd class="ltr">${c.email || "—"}</dd>
         <dt>גורם מפנה</dt><dd>${c.referrer || "—"}</dd><dt>הסדר תשלום</dt><dd>${C.PRICING_MODELS[c.pricingModel || "single"]}</dd>
         <dt>מחיר ליחידה</dt><dd>${rateText(c)}</dd>
-        ${c.pricingModel === "monthly" ? h`<dt>תשלום חודשי</dt><dd>${C.fmtMoney(c.monthlyFee)}</dd>` : ""}
+        ${c.pricingModel === "monthly" ? h`<dt>תשלום חודשי</dt><dd>${C.fmtMoney(c.monthlyFee)} לחודש (מה-1 עד סוף החודש)</dd>
+          <dt>תקופת הליווי</dt><dd>${c.monthlyStart ? "מ" + C.monthLabel(String(c.monthlyStart).slice(0, 7)) : "מהפגישה הראשונה"}${c.monthlyEnd ? " עד " + C.monthLabel(String(c.monthlyEnd).slice(0, 7)) : " - נמשך"}</dd>` : ""}
         <dt>שם התהליך</dt><dd>${c.processName || "—"}</dd><dt>מילת זיהוי ביומן</dt><dd>${c.calendarKeyword || "—"}</dd>
         <dt>נוצר</dt><dd>${C.fmtDate(c.createdAt) || "—"}</dd>
       </dl>${c.notes ? h`<div class="small pre" style="margin-top:12px;padding:10px;background:var(--cream);border-radius:10px">🔒 ${c.notes}</div>` : ""}</div>
