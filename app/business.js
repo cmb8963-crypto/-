@@ -67,7 +67,7 @@
           ${awaiting.slice(0, 12).map(function (s) { return awaitingItem(s); })}
           ${awaiting.length > 12 ? h`<a href="#biz/sessions" class="small">ועוד ${awaiting.length - 12} פגישות ממתינות לאישור ←</a>` : ""}
           ${renew.map(function (a) { return h`<div class="aitem warn"><span>🔔</span><span class="who">${a.client.name}</span><span class="when">נותרו ${r2(a.unitsRemaining)} ${unitLabel(a.currentPackage && a.currentPackage.unitType)} בסל - זמן לחידוש</span>
-            <span class="acts"><button class="btn btn-outline btn-xs" data-act="newPackage" data-client="${a.client.id}">+ סל חדש</button><a class="btn btn-ghost btn-xs" href="#biz/client/${a.client.id}">לכרטיס</a></span></div>`; })}
+            <span class="acts"><button class="btn btn-outline btn-xs" data-act="newPackage" data-client="${a.client.id}">+ סל חדש</button><button class="btn btn-ghost btn-xs" data-act="finishClient" data-client="${a.client.id}">סיים את התהליך</button><a class="btn btn-ghost btn-xs" href="#biz/client/${a.client.id}">לכרטיס</a></span></div>`; })}
           ${pendingB.length ? h`<div class="aitem"><span>📅</span><span class="who">${pendingB.length} בקשות לפגישה ממתינות</span><span class="acts"><a class="btn btn-outline btn-xs" href="#biz/inbox">לטיפול</a></span></div>` : ""}
           ${unread.length ? h`<div class="aitem"><span>✉️</span><span class="who">${unread.length} הודעות חדשות מלקוחות</span><span class="acts"><a class="btn btn-outline btn-xs" href="#biz/inbox">לקריאה</a></span></div>` : ""}
           ${unassigned.length ? h`<div class="aitem"><span>❓</span><span class="who">${unassigned.length} אירועי יומן לא שויכו ללקוח</span><span class="acts"><a class="btn btn-outline btn-xs" href="#biz/sessions">לשיוך</a></span></div>` : ""}
@@ -98,8 +98,13 @@
         <button class="btn btn-good btn-xs" data-act="setStatus" data-id="${s.id}" data-status="held">✓ התקיימה</button>
         <button class="btn btn-outline btn-xs" data-act="setStatus" data-id="${s.id}" data-status="cancel_ontime">בוטלה בזמן</button>
         <button class="btn btn-bad btn-xs" data-act="setStatus" data-id="${s.id}" data-status="cancel_late">בוטלה באיחור (חיוב)</button>
+        <button class="btn btn-ghost btn-xs" data-act="hideSession" data-id="${s.id}" title="אירוע ביומן שאינו פגישה עם הלקוח (למשל אירוע משפחתי)">לא פגישה - הסתרה</button>
       </span></div>`;
   }
+  // Hidden, not deleted: the calendar sync remembers it and never brings it back.
+  Actions.hideSession = function (t) {
+    App.save("sessions", [{ id: t.dataset.id, clientId: "", status: "ignored", clientLocked: "true" }], { msg: "הוסתר - האירוע ביומן נשאר כמו שהוא" });
+  };
 
   Actions.setStatus = async function (t) {
     var s = C.byId(App.db.sessions, t.dataset.id);
@@ -759,6 +764,13 @@
     });
   }
   Actions.newPackage = function (t) { packageForm(t.dataset.client); };
+  // The client finished: no more renewal alerts or reminder e-mails. All history stays.
+  Actions.finishClient = async function (t) {
+    var c = App.client(t.dataset.client);
+    if (!c) return;
+    if (!(await UI.confirm("סיום תהליך - " + c.name, "הלקוח יסומן כ\"לא פעיל\": לא תופיע יותר התראת חידוש סל, ולא יישלחו אליו תזכורות. כל ההיסטוריה (פגישות, תשלומים, יתרה) נשמרת. אם יחזור - אפשר להחזיר ל\"פעיל\" בפרטי הלקוח, או פשוט לשייך אליו פגישה חדשה.", "סיום התהליך"))) return;
+    App.save("clients", [{ id: c.id, status: "inactive" }], { msg: c.name + " סומן כמי שסיים את התהליך" });
+  };
   Actions.editPackage = function (t) { var p = C.byId(App.db.packages, t.dataset.id); packageForm(p.clientId, p); };
 
   Actions.newCharge = function (t) {
@@ -866,9 +878,20 @@
     });
     var del = m.$("[data-del]");
     if (del) del.addEventListener("click", async function () {
-      var alsoCal = !!s.calendarEventId;
-      if (!(await UI.confirm("מחיקת פגישה", alsoCal ? "הפגישה תימחק גם מיומן Google. אם היא בוטלה - עדיף לסמן 'בוטלה' במקום למחוק." : "למחוק את הפגישה?", "מחיקה", true))) return;
-      m.close(); App.remove("sessions", s.id, { deleteEvent: alsoCal });
+      if (s.calendarEventId) {
+        var q = UI.modal({
+          title: "הפגישה מקושרת ליומן Google",
+          body: h`<p><b>לא פגישה עם לקוח</b> (למשל אירוע משפחתי) - בחרו "הסתרה". האירוע נשאר ביומן, והמערכת לא תציג אותו שוב.</p>
+            <p style="margin-top:8px"><b>פגישה שבוטלה</b> - עדיף לסמן "בוטלה בזמן" או "בוטלה באיחור" בסטטוס.</p>
+            <p class="small muted" style="margin-top:8px">"מחיקה מהיומן" מוחקת את האירוע גם מיומן Google.</p>`,
+          foot: h`<button class="btn btn-primary" data-hide>הסתרה (היומן לא משתנה)</button><button class="btn btn-bad" data-delcal>מחיקה מהמערכת ומהיומן</button><button class="btn btn-outline" data-close>ביטול</button>`
+        });
+        q.$("[data-hide]").addEventListener("click", function () { q.close(); m.close(); Actions.hideSession({ dataset: { id: s.id } }); });
+        q.$("[data-delcal]").addEventListener("click", function () { q.close(); m.close(); App.remove("sessions", s.id, { deleteEvent: true }); });
+        return;
+      }
+      if (!(await UI.confirm("מחיקת פגישה", "למחוק את הפגישה?", "מחיקה", true))) return;
+      m.close(); App.remove("sessions", s.id);
     });
   }
   Actions.newSession = function (t) { sessionForm({ clientId: t.dataset.client || "" }); };
@@ -1169,3 +1192,4 @@
     UI.$$("[data-pick-edit]", m.el).forEach(function (b) { b.addEventListener("click", function () { m.close(); summaryForm(b.dataset.pickEdit); }); });
   };
 })();
+
