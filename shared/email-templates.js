@@ -159,8 +159,11 @@ var EmailTemplates = (function () {
       ["פגישות שהתקיימו", String(a.heldCount)]
     ];
     if (pkg) {
-      rows.push(["נוצלו מהסל הנוכחי", Core.round2(pkg.used) + " מתוך " + Core.round2(pkg.units) + " " + unit]);
-      rows.push(["נותרו בסל", Core.round2(pkg.remaining) + " " + unit]);
+      rows.push(["הסל שלך", esc(pkg.name || Core.packageName(pkg.units, pkg.unitType))]);
+      rows.push(["מחיר הסל", money(pkg.price) + (pkg.discount > 0 ? " (אחרי הנחה " + money(pkg.discount) + ")" : "")]);
+      rows.push(["שולם עבור הסל", money(pkg.paid) + (pkg.unpaid > 0 ? " - נותר לתשלום " + money(pkg.unpaid) : " ✓"), pkg.unpaid > 0 ? C.warn : C.good]);
+      rows.push(["נוצלו מהסל", Core.round2(pkg.used) + " מתוך " + Core.round2(pkg.units) + " " + unit + " (" + money(pkg.valueUsed) + ")"]);
+      rows.push(["נשאר זיכוי בסל", Core.round2(pkg.remaining) + " " + unit + " (" + money(pkg.credit) + ")", C.good]);
     }
     rows.push(["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]);
     var dates = a.sessions.filter(function (s) { return Core.CONSUMING[s.status]; }).map(function (s) { return Core.fmtDate(s.date); }).filter(Boolean);
@@ -195,7 +198,7 @@ var EmailTemplates = (function () {
       (sm.homework ? heading("שיעורי בית") + box(structured(sm.homework), "#FFFDF8") : "") +
       (a ? heading("מצב התהליך") + kvTable([
         ["פגישות שהתקיימו", String(a.heldCount)],
-        pkg ? ["נותרו בסל", Core.round2(pkg.remaining) + " " + (pkg.unitType === "hour" ? "שעות" : "פגישות")] : ["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]
+        pkg ? ["נשאר זיכוי בסל", Core.round2(pkg.remaining) + " מתוך " + Core.round2(pkg.units) + " " + (pkg.unitType === "hour" ? "שעות" : "פגישות") + " (" + money(pkg.credit) + ")"] : ["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]
       ]) + (pkg ? progress(pkg.used, pkg.units) : "") : "") +
       (a && a.nextSession ? para('<br>הפגישה הבאה: <strong>' + esc(when(a.nextSession.date)) + '</strong>') : button("קביעת הפגישה הבאה", x.bookingUrl || x.portalUrl));
     return { subject: "סיכום הפגישה" + (s.date ? " - " + Core.fmtDate(s.date) : ""), html: layout(x.st, "סיכום, החלטות ושיעורי בית", "סיכום הפגישה שלנו", body) };

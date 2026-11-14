@@ -198,7 +198,8 @@
     var maxCode = (App.db.clients || []).reduce(function (m, x) { return Math.max(m, C.num(x.code)); }, 0);
     var presets = C.priceList(st).packages;
     // A package can be sold right here for a new client (or one that has none yet).
-    var offerPkg = !c.id || !(App.db.packages || []).some(function (x) { return x.clientId === c.id; });
+    var curPkgs = c.id ? C.clientAccount(App.db, c.id).packages : [];
+    var offerPkg = !curPkgs.some(function (x) { return x.remaining > 0.0001; });
     var pkgChoice = "";
     var m = UI.modal({
       title: c.id ? "עריכת פרטי לקוח" : "לקוח חדש", wide: true,
@@ -225,7 +226,7 @@
         <datalist id="refList">${Array.from(new Set((App.db.clients || []).map(function (x) { return x.referrer; }).filter(Boolean))).map(function (r) { return h`<option value="${r}">`; })}</datalist>
       </div>
       ${offerPkg ? h`<div class="card" id="newPkgCard" style="margin-top:14px;display:none">
-        <div class="card-title"><h3>סל פגישות ללקוח</h3><span class="sub">פגישות מעבר לסל יחויבו במחיר לפגישה בודדת שלמעלה</span></div>
+        <div class="card-title"><h3>${curPkgs.length ? "סל חדש ללקוח (הסל הקודם נוצל)" : "סל פגישות ללקוח"}</h3><span class="sub">המחיר נרשם כחיוב, והפגישות יורדות מהסל. פגישות מעבר לסל יחויבו במחיר לפגישה בודדת</span></div>
         <div class="chips" style="margin-bottom:12px">${presets.map(function (x, i) {
           return h`<button type="button" class="chip" data-npreset="${i}">${x.name || C.packageName(x.units, x.unitType)} · ${C.fmtMoney(x.price)}</button>`; })}<button type="button" class="chip" data-npreset="custom">סל מותאם</button><button type="button" class="chip" data-npreset="none">בלי סל כרגע</button></div>
         <div class="form-grid" id="newPkgBox" style="display:none">
@@ -392,6 +393,7 @@
           return h`<div class="pkg ${p.remaining <= 0 ? "done" : ""}"><div class="row between"><b>${p.name}</b><span class="small muted">${C.fmtDate(p.startDate)} · ${C.fmtMoney(p.price)}${p.discount > 0 ? " (אחרי הנחה " + C.fmtMoney(p.discount) + ")" : ""}</span></div>
             <div class="row between small" style="margin:6px 0"><span>נוצלו <b>${r2(p.used)}</b> מתוך ${r2(p.units)} ${unitLabel(p.unitType)}</span><span>נותרו <b class="${p.remaining <= C.num(App.settings().renewalThreshold) ? "t-bad" : ""}">${r2(p.remaining)}</b></span></div>
             ${UI.bar(p.units ? p.used / p.units : 0)}
+            <div class="row small" style="margin-top:6px;gap:12px;flex-wrap:wrap"><span>שולם <b class="${p.unpaid > 0 ? "t-bad" : ""}">${C.fmtMoney(p.paid)}</b>${p.unpaid > 0 ? " (חסר " + C.fmtMoney(p.unpaid) + ")" : " ✓"}</span><span>נוצל ${C.fmtMoney(p.valueUsed)}</span><span>נשאר זיכוי <b>${C.fmtMoney(p.credit)}</b></span></div>
             <div class="row" style="margin-top:6px"><button class="btn btn-ghost btn-xs" data-act="editPackage" data-id="${p.id}">עריכה</button><button class="btn btn-ghost btn-xs" data-act="delRow" data-table="packages" data-id="${p.id}">מחיקה</button></div></div>`;
         }) : h`<div class="empty">אין סלים. ${a.model === "single" ? "הלקוח מחויב לפי פגישה." : ""}</div>`}
         ${a.overflowUnits > 0 && a.packages.length ? h`<p class="small muted" style="margin-top:8px">${r2(a.overflowUnits)} יח' מעבר לסלים חויבו לפי ${C.fmtMoney(C.effectiveRate(c))} ליחידה.</p>` : ""}

@@ -295,7 +295,7 @@ var Core = (function () {
     var chargeLines = [];
     packages.forEach(function (p) {
       chargeLines.push({ date: p.startDate, label: (p.name || "סל") + (p.discount > 0 ? " (" + fmtMoney(p.listPrice) + " פחות הנחה " + fmtMoney(p.discount) + ")" : ""),
-        amount: p.price, kind: "package" });
+        amount: p.price, kind: "package", packageId: p.id });
     });
     if (model === "monthly") {
       monthlyMonths(client, overflowSessions, now).forEach(function (mk) {
@@ -324,6 +324,23 @@ var Core = (function () {
 
     var totalCharges = round2(chargeLines.reduce(function (s, c) { return s + c.amount; }, 0));
     var totalPaid = round2(payments.reduce(function (s, p) { return s + num(p.amount); }, 0));
+
+    // Payments cover the charges in date order, so each package knows how much of it is paid.
+    var pool = totalPaid, paidByPkg = {};
+    chargeLines.forEach(function (l) {
+      if (l.amount <= 0) { pool += -l.amount; return; }
+      var take = Math.max(0, Math.min(pool, l.amount)); pool -= take;
+      if (l.packageId) paidByPkg[l.packageId] = round2(take);
+    });
+    // The package as a credit: its price spread over its units.
+    packages.forEach(function (p) {
+      var per = p.units > 0 ? p.price / p.units : 0;
+      p.unitValue = round2(per);
+      p.valueUsed = round2(per * p.used);
+      p.credit = round2(per * p.remaining);
+      p.paid = paidByPkg[p.id] || 0;
+      p.unpaid = round2(Math.max(0, p.price - p.paid));
+    });
 
     var unitsPurchased = packages.reduce(function (s, p) { return s + p.units; }, 0);
     var unitsUsedInPkgs = packages.reduce(function (s, p) { return s + p.used; }, 0);
@@ -620,6 +637,10 @@ var Core = (function () {
         purchased: pkg ? pkg.units : 0,
         used: pkg ? pkg.used : 0,
         remaining: pkg ? pkg.remaining : 0,
+        price: pkg ? pkg.price : 0,
+        paid: pkg ? pkg.paid : 0,
+        valueUsed: pkg ? pkg.valueUsed : 0,
+        credit: pkg ? pkg.credit : 0,
         heldCount: acc.heldCount,
         hoursTotal: acc.hoursTotal
       },
@@ -855,8 +876,11 @@ var EmailTemplates = (function () {
       ["פגישות שהתקיימו", String(a.heldCount)]
     ];
     if (pkg) {
-      rows.push(["נוצלו מהסל הנוכחי", Core.round2(pkg.used) + " מתוך " + Core.round2(pkg.units) + " " + unit]);
-      rows.push(["נותרו בסל", Core.round2(pkg.remaining) + " " + unit]);
+      rows.push(["הסל שלך", esc(pkg.name || Core.packageName(pkg.units, pkg.unitType))]);
+      rows.push(["מחיר הסל", money(pkg.price) + (pkg.discount > 0 ? " (אחרי הנחה " + money(pkg.discount) + ")" : "")]);
+      rows.push(["שולם עבור הסל", money(pkg.paid) + (pkg.unpaid > 0 ? " - נותר לתשלום " + money(pkg.unpaid) : " ✓"), pkg.unpaid > 0 ? C.warn : C.good]);
+      rows.push(["נוצלו מהסל", Core.round2(pkg.used) + " מתוך " + Core.round2(pkg.units) + " " + unit + " (" + money(pkg.valueUsed) + ")"]);
+      rows.push(["נשאר זיכוי בסל", Core.round2(pkg.remaining) + " " + unit + " (" + money(pkg.credit) + ")", C.good]);
     }
     rows.push(["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]);
     var dates = a.sessions.filter(function (s) { return Core.CONSUMING[s.status]; }).map(function (s) { return Core.fmtDate(s.date); }).filter(Boolean);
@@ -891,7 +915,7 @@ var EmailTemplates = (function () {
       (sm.homework ? heading("שיעורי בית") + box(structured(sm.homework), "#FFFDF8") : "") +
       (a ? heading("מצב התהליך") + kvTable([
         ["פגישות שהתקיימו", String(a.heldCount)],
-        pkg ? ["נותרו בסל", Core.round2(pkg.remaining) + " " + (pkg.unitType === "hour" ? "שעות" : "פגישות")] : ["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]
+        pkg ? ["נשאר זיכוי בסל", Core.round2(pkg.remaining) + " מתוך " + Core.round2(pkg.units) + " " + (pkg.unitType === "hour" ? "שעות" : "פגישות") + " (" + money(pkg.credit) + ")"] : ["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]
       ]) + (pkg ? progress(pkg.used, pkg.units) : "") : "") +
       (a && a.nextSession ? para('<br>הפגישה הבאה: <strong>' + esc(when(a.nextSession.date)) + '</strong>') : button("קביעת הפגישה הבאה", x.bookingUrl || x.portalUrl));
     return { subject: "סיכום הפגישה" + (s.date ? " - " + Core.fmtDate(s.date) : ""), html: layout(x.st, "סיכום, החלטות ושיעורי בית", "סיכום הפגישה שלנו", body) };

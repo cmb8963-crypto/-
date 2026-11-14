@@ -291,7 +291,7 @@ var Core = (function () {
     var chargeLines = [];
     packages.forEach(function (p) {
       chargeLines.push({ date: p.startDate, label: (p.name || "סל") + (p.discount > 0 ? " (" + fmtMoney(p.listPrice) + " פחות הנחה " + fmtMoney(p.discount) + ")" : ""),
-        amount: p.price, kind: "package" });
+        amount: p.price, kind: "package", packageId: p.id });
     });
     if (model === "monthly") {
       monthlyMonths(client, overflowSessions, now).forEach(function (mk) {
@@ -320,6 +320,23 @@ var Core = (function () {
 
     var totalCharges = round2(chargeLines.reduce(function (s, c) { return s + c.amount; }, 0));
     var totalPaid = round2(payments.reduce(function (s, p) { return s + num(p.amount); }, 0));
+
+    // Payments cover the charges in date order, so each package knows how much of it is paid.
+    var pool = totalPaid, paidByPkg = {};
+    chargeLines.forEach(function (l) {
+      if (l.amount <= 0) { pool += -l.amount; return; }
+      var take = Math.max(0, Math.min(pool, l.amount)); pool -= take;
+      if (l.packageId) paidByPkg[l.packageId] = round2(take);
+    });
+    // The package as a credit: its price spread over its units.
+    packages.forEach(function (p) {
+      var per = p.units > 0 ? p.price / p.units : 0;
+      p.unitValue = round2(per);
+      p.valueUsed = round2(per * p.used);
+      p.credit = round2(per * p.remaining);
+      p.paid = paidByPkg[p.id] || 0;
+      p.unpaid = round2(Math.max(0, p.price - p.paid));
+    });
 
     var unitsPurchased = packages.reduce(function (s, p) { return s + p.units; }, 0);
     var unitsUsedInPkgs = packages.reduce(function (s, p) { return s + p.used; }, 0);
@@ -616,6 +633,10 @@ var Core = (function () {
         purchased: pkg ? pkg.units : 0,
         used: pkg ? pkg.used : 0,
         remaining: pkg ? pkg.remaining : 0,
+        price: pkg ? pkg.price : 0,
+        paid: pkg ? pkg.paid : 0,
+        valueUsed: pkg ? pkg.valueUsed : 0,
+        credit: pkg ? pkg.credit : 0,
         heldCount: acc.heldCount,
         hoursTotal: acc.hoursTotal
       },
