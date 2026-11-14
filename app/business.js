@@ -196,6 +196,10 @@
     var st = App.settings();
     c = c || { pricingModel: "single", unitType: "session", rate: st.defaultRate, status: "active" };
     var maxCode = (App.db.clients || []).reduce(function (m, x) { return Math.max(m, C.num(x.code)); }, 0);
+    var presets = C.priceList(st).packages;
+    // A package can be sold right here for a new client (or one that has none yet).
+    var offerPkg = !c.id || !(App.db.packages || []).some(function (x) { return x.clientId === c.id; });
+    var pkgChoice = "";
     var m = UI.modal({
       title: c.id ? "עריכת פרטי לקוח" : "לקוח חדש", wide: true,
       body: h`<div class="form-grid" id="clientFormBox">
@@ -217,7 +221,18 @@
         <label class="field"><span>מילת זיהוי ביומן (אופציונלי)</span><input type="text" name="calendarKeyword" value="${c.calendarKeyword}" placeholder="אם השם ביומן שונה"></label>
         <label class="field span-2"><span>הערות פנימיות (לא מוצגות ללקוח)</span><textarea name="notes">${c.notes}</textarea></label>
         <datalist id="refList">${Array.from(new Set((App.db.clients || []).map(function (x) { return x.referrer; }).filter(Boolean))).map(function (r) { return h`<option value="${r}">`; })}</datalist>
-      </div>`,
+      </div>
+      ${offerPkg ? h`<div class="card" id="newPkgCard" style="margin-top:14px;display:none">
+        <div class="card-title"><h3>סל פגישות ללקוח</h3><span class="sub">פגישות מעבר לסל יחויבו במחיר לפגישה בודדת שלמעלה</span></div>
+        <div class="chips" style="margin-bottom:12px">${presets.map(function (x, i) {
+          return h`<button type="button" class="chip" data-npreset="${i}">${x.name || C.packageName(x.units, x.unitType)} · ${C.fmtMoney(x.price)}</button>`; })}<button type="button" class="chip" data-npreset="custom">סל מותאם</button><button type="button" class="chip" data-npreset="none">בלי סל כרגע</button></div>
+        <div class="form-grid" id="newPkgBox" style="display:none">
+          <label class="field"><span>כמות</span><input type="number" name="units" min="0" step="0.5"></label>
+          <label class="field"><span>יחידה</span><select name="unitType">${UI.options([["session", "פגישות"], ["hour", "שעות"]], "session")}</select></label>
+          <label class="field"><span>מחיר הסל ₪</span><input type="number" name="price" min="0"></label>
+          <label class="field"><span>הנחה ₪ (סכום שיורד מהמחיר)</span><input type="number" name="discount" min="0" placeholder="0"></label>
+          <div class="span-2 aitem" id="newPkgFinal"></div>
+        </div></div>` : ""}`,
       foot: h`<button class="btn btn-primary" data-save>שמירה</button><button class="btn btn-outline" data-close>ביטול</button>`
     });
     function rateFinal() {
@@ -229,15 +244,59 @@
     m.$("[name=rate]").addEventListener("input", rateFinal);
     m.$("[name=discount]").addEventListener("input", rateFinal);
     rateFinal();
+    function pkgView() {
+      if (!offerPkg) return;
+      var isPkg = m.$("[name=pricingModel]").value === "package";
+      m.$("#newPkgCard").style.display = isPkg ? "" : "none";
+      m.$("#newPkgBox").style.display = isPkg && pkgChoice && pkgChoice !== "none" ? "" : "none";
+      var price = C.num(m.$("#newPkgBox [name=price]").value), dsc = C.num(m.$("#newPkgBox [name=discount]").value);
+      var units = C.num(m.$("#newPkgBox [name=units]").value), unit = m.$("#newPkgBox [name=unitType]").value;
+      var pay = Math.max(0, price - dsc);
+      UI.setHtml(m.$("#newPkgFinal"), price ? h`<span>הלקוח צריך לשלם על הסל: <b style="font-size:17px">${C.fmtMoney(pay)}</b></span>
+        ${dsc > 0 ? h`<span class="when">(${C.fmtMoney(price)} פחות הנחה ${C.fmtMoney(dsc)})</span>` : ""}
+        ${units ? h`<span class="when">· ${C.fmtMoney(pay / units)} ל${unit === "hour" ? "שעה" : "פגישה"}</span>` : ""}` : h`<span class="when">יש להזין כמות ומחיר</span>`);
+    }
+    if (offerPkg) {
+      m.$("[name=pricingModel]").addEventListener("change", pkgView);
+      UI.$$("[data-npreset]", m.el).forEach(function (b) {
+        b.addEventListener("click", function () {
+          UI.$$("[data-npreset]", m.el).forEach(function (x) { x.classList.toggle("active", x === b); });
+          pkgChoice = b.dataset.npreset;
+          if (pkgChoice !== "none" && pkgChoice !== "custom") {
+            var x = presets[+pkgChoice];
+            m.$("#newPkgBox [name=units]").value = x.units; m.$("#newPkgBox [name=unitType]").value = x.unitType;
+            m.$("#newPkgBox [name=price]").value = x.price;
+          }
+          pkgView();
+          if (pkgChoice === "custom") m.$("#newPkgBox [name=units]").focus();
+        });
+      });
+      UI.$$("#newPkgBox input, #newPkgBox select", m.el).forEach(function (el) { el.addEventListener("input", pkgView); });
+      pkgView();
+    }
     m.$("[data-save]").addEventListener("click", async function () {
       var d = UI.formData(m.$("#clientFormBox"));
+      var pkg = null;
+      if (offerPkg && d.pricingModel === "package" && pkgChoice && pkgChoice !== "none") {
+        pkg = UI.formData(m.$("#newPkgBox"));
+        if (!(C.num(pkg.units) > 0)) { UI.toast("יש להזין כמות לסל", true); return; }
+        if (!(C.num(pkg.price) > 0)) { UI.toast("יש להזין מחיר לסל", true); return; }
+        if (C.num(pkg.discount) > C.num(pkg.price)) { UI.toast("ההנחה גדולה ממחיר הסל", true); return; }
+        var preset = presets[+pkgChoice];
+        pkg.name = preset && C.num(preset.units) === C.num(pkg.units) && preset.unitType === pkg.unitType ? (preset.name || C.packageName(pkg.units, pkg.unitType)) : C.packageName(pkg.units, pkg.unitType);
+        if (!pkg.discount) delete pkg.discount;
+      }
       if (!d.name) { UI.toast("יש להזין שם", true); return; }
       if (C.num(d.discount) > C.num(d.rate) && C.num(d.rate) > 0) { UI.toast("ההנחה גדולה מהמחיר", true); return; }
       if (d.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)) { UI.toast("כתובת המייל אינה תקינה", true); return; }
       d.id = c.id || C.uid("cl");
       if (!c.id) d.createdAt = C.ymd(new Date());
       m.close();
-      await App.save("clients", [d]);
+      if (!(await App.save("clients", [d], pkg ? { toast: false } : undefined))) return;
+      if (pkg) {
+        pkg.id = C.uid("pa"); pkg.clientId = d.id; pkg.startDate = C.ymd(new Date());
+        await App.save("packages", [pkg], { msg: "נשמר, כולל " + pkg.name });
+      }
       if (!c.id) location.hash = "#biz/client/" + d.id;
     });
   }
