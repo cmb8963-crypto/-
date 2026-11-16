@@ -67,7 +67,7 @@
           ${awaiting.slice(0, 12).map(function (s) { return awaitingItem(s); })}
           ${awaiting.length > 12 ? h`<a href="#biz/sessions" class="small">ועוד ${awaiting.length - 12} פגישות ממתינות לאישור ←</a>` : ""}
           ${renew.map(function (a) { return h`<div class="aitem warn"><span>🔔</span><span class="who">${a.client.name}</span><span class="when">נותרו ${r2(a.unitsRemaining)} ${unitLabel(a.currentPackage && a.currentPackage.unitType)} בסל - זמן לחידוש</span>
-            <span class="acts"><button class="btn btn-outline btn-xs" data-act="newPackage" data-client="${a.client.id}">+ סל חדש</button><a class="btn btn-ghost btn-xs" href="#biz/client/${a.client.id}">לכרטיס</a></span></div>`; })}
+            <span class="acts"><button class="btn btn-outline btn-xs" data-act="newPackage" data-client="${a.client.id}">+ סל חדש</button><button class="btn btn-ghost btn-xs" data-act="finishClient" data-client="${a.client.id}">סיים את התהליך</button><a class="btn btn-ghost btn-xs" href="#biz/client/${a.client.id}">לכרטיס</a></span></div>`; })}
           ${pendingB.length ? h`<div class="aitem"><span>📅</span><span class="who">${pendingB.length} בקשות לפגישה ממתינות</span><span class="acts"><a class="btn btn-outline btn-xs" href="#biz/inbox">לטיפול</a></span></div>` : ""}
           ${unread.length ? h`<div class="aitem"><span>✉️</span><span class="who">${unread.length} הודעות חדשות מלקוחות</span><span class="acts"><a class="btn btn-outline btn-xs" href="#biz/inbox">לקריאה</a></span></div>` : ""}
           ${unassigned.length ? h`<div class="aitem"><span>❓</span><span class="who">${unassigned.length} אירועי יומן לא שויכו ללקוח</span><span class="acts"><a class="btn btn-outline btn-xs" href="#biz/sessions">לשיוך</a></span></div>` : ""}
@@ -98,8 +98,13 @@
         <button class="btn btn-good btn-xs" data-act="setStatus" data-id="${s.id}" data-status="held">✓ התקיימה</button>
         <button class="btn btn-outline btn-xs" data-act="setStatus" data-id="${s.id}" data-status="cancel_ontime">בוטלה בזמן</button>
         <button class="btn btn-bad btn-xs" data-act="setStatus" data-id="${s.id}" data-status="cancel_late">בוטלה באיחור (חיוב)</button>
+        <button class="btn btn-ghost btn-xs" data-act="hideSession" data-id="${s.id}" title="אירוע ביומן שאינו פגישה עם הלקוח (למשל אירוע משפחתי)">לא פגישה - הסתרה</button>
       </span></div>`;
   }
+  // Hidden, not deleted: the calendar sync remembers it and never brings it back.
+  Actions.hideSession = function (t) {
+    App.save("sessions", [{ id: t.dataset.id, clientId: "", status: "ignored", clientLocked: "true" }], { msg: "הוסתר - האירוע ביומן נשאר כמו שהוא" });
+  };
 
   Actions.setStatus = async function (t) {
     var s = C.byId(App.db.sessions, t.dataset.id);
@@ -117,7 +122,7 @@
     var q = ui.clientSearch.trim().toLowerCase();
     var rows = Object.keys(accs).map(function (id) { return accs[id]; }).filter(function (a) {
       var c = a.client;
-      if (ui.clientFilter === "active" && c.status === "inactive") return false;
+      if (ui.clientFilter === "active" && c.status === "inactive" && !q) return false;   // a search also finds inactive cards
       if (ui.clientFilter === "inactive" && c.status !== "inactive") return false;
       if (ui.clientFilter === "debt" && !(a.balance > 0.5)) return false;
       if (ui.clientFilter === "credit" && !(a.balance < -0.5)) return false;
@@ -196,6 +201,11 @@
     var st = App.settings();
     c = c || { pricingModel: "single", unitType: "session", rate: st.defaultRate, status: "active" };
     var maxCode = (App.db.clients || []).reduce(function (m, x) { return Math.max(m, C.num(x.code)); }, 0);
+    var presets = C.priceList(st).packages;
+    // A package can be sold right here for a new client (or one that has none yet).
+    var curPkgs = c.id ? C.clientAccount(App.db, c.id).packages : [];
+    var offerPkg = !curPkgs.some(function (x) { return x.remaining > 0.0001; });
+    var pkgChoice = "";
     var m = UI.modal({
       title: c.id ? "עריכת פרטי לקוח" : "לקוח חדש", wide: true,
       body: h`<div class="form-grid" id="clientFormBox">
@@ -212,12 +222,25 @@
             <input type="number" name="rate" value="${c.rate}" min="0" style="width:130px" aria-label="מחיר אחר">
             <span class="small muted">הנחה לכל פגישה ₪</span><input type="number" name="discount" value="${c.discount}" min="0" style="width:110px" placeholder="0" aria-label="הנחה לכל פגישה">
             <b class="small" id="rateFinal"></b></div></div>
-        <label class="field"><span>תשלום חודשי (בליווי חודשי) ₪</span><input type="number" name="monthlyFee" value="${c.monthlyFee}" min="0"></label>
+        <label class="field monthly-only"><span>תשלום חודשי קבוע ₪</span><input type="number" name="monthlyFee" value="${c.monthlyFee}" min="0"></label>
+        <label class="field monthly-only"><span>חודש התחלה</span><input type="month" name="monthlyStart" value="${String(c.monthlyStart || "").slice(0, 7) || (c.id ? "" : C.thisMonth())}"></label>
+        <label class="field monthly-only"><span>חודש סיום (ריק = הליווי נמשך)</span><input type="month" name="monthlyEnd" value="${String(c.monthlyEnd || "").slice(0, 7)}"></label>
         <label class="field"><span>שם התהליך (מוצג ללקוח)</span><input type="text" name="processName" value="${c.processName}" placeholder="למשל: תהליך אישי ועסקי"></label>
         <label class="field"><span>מילת זיהוי ביומן (אופציונלי)</span><input type="text" name="calendarKeyword" value="${c.calendarKeyword}" placeholder="אם השם ביומן שונה"></label>
         <label class="field span-2"><span>הערות פנימיות (לא מוצגות ללקוח)</span><textarea name="notes">${c.notes}</textarea></label>
         <datalist id="refList">${Array.from(new Set((App.db.clients || []).map(function (x) { return x.referrer; }).filter(Boolean))).map(function (r) { return h`<option value="${r}">`; })}</datalist>
-      </div>`,
+      </div>
+      ${offerPkg ? h`<div class="card" id="newPkgCard" style="margin-top:14px;display:none">
+        <div class="card-title"><h3>${curPkgs.length ? "סל חדש ללקוח (הסל הקודם נוצל)" : "סל פגישות ללקוח"}</h3><span class="sub">המחיר נרשם כחיוב, והפגישות יורדות מהסל. פגישות מעבר לסל יחויבו במחיר לפגישה בודדת</span></div>
+        <div class="chips" style="margin-bottom:12px">${presets.map(function (x, i) {
+          return h`<button type="button" class="chip" data-npreset="${i}">${x.name || C.packageName(x.units, x.unitType)} · ${C.fmtMoney(x.price)}</button>`; })}<button type="button" class="chip" data-npreset="custom">סל מותאם</button><button type="button" class="chip" data-npreset="none">בלי סל כרגע</button></div>
+        <div class="form-grid" id="newPkgBox" style="display:none">
+          <label class="field"><span>כמות</span><input type="number" name="units" min="0" step="0.5"></label>
+          <label class="field"><span>יחידה</span><select name="unitType">${UI.options([["session", "פגישות"], ["hour", "שעות"]], "session")}</select></label>
+          <label class="field"><span>מחיר הסל ₪</span><input type="number" name="price" min="0"></label>
+          <label class="field"><span>הנחה ₪ (סכום שיורד מהמחיר)</span><input type="number" name="discount" min="0" placeholder="0"></label>
+          <div class="span-2 aitem" id="newPkgFinal"></div>
+        </div></div>` : ""}`,
       foot: h`<button class="btn btn-primary" data-save>שמירה</button><button class="btn btn-outline" data-close>ביטול</button>`
     });
     function rateFinal() {
@@ -229,15 +252,67 @@
     m.$("[name=rate]").addEventListener("input", rateFinal);
     m.$("[name=discount]").addEventListener("input", rateFinal);
     rateFinal();
+    function monthlyView() {
+      var on = m.$("[name=pricingModel]").value === "monthly";
+      UI.$$(".monthly-only", m.el).forEach(function (el) { el.style.display = on ? "" : "none"; });
+    }
+    m.$("[name=pricingModel]").addEventListener("change", monthlyView);
+    monthlyView();
+    function pkgView() {
+      if (!offerPkg) return;
+      var isPkg = m.$("[name=pricingModel]").value === "package";
+      m.$("#newPkgCard").style.display = isPkg ? "" : "none";
+      m.$("#newPkgBox").style.display = isPkg && pkgChoice && pkgChoice !== "none" ? "" : "none";
+      var price = C.num(m.$("#newPkgBox [name=price]").value), dsc = C.num(m.$("#newPkgBox [name=discount]").value);
+      var units = C.num(m.$("#newPkgBox [name=units]").value), unit = m.$("#newPkgBox [name=unitType]").value;
+      var pay = Math.max(0, price - dsc);
+      UI.setHtml(m.$("#newPkgFinal"), price ? h`<span>הלקוח צריך לשלם על הסל: <b style="font-size:17px">${C.fmtMoney(pay)}</b></span>
+        ${dsc > 0 ? h`<span class="when">(${C.fmtMoney(price)} פחות הנחה ${C.fmtMoney(dsc)})</span>` : ""}
+        ${units ? h`<span class="when">· ${C.fmtMoney(pay / units)} ל${unit === "hour" ? "שעה" : "פגישה"}</span>` : ""}` : h`<span class="when">יש להזין כמות ומחיר</span>`);
+    }
+    if (offerPkg) {
+      m.$("[name=pricingModel]").addEventListener("change", pkgView);
+      UI.$$("[data-npreset]", m.el).forEach(function (b) {
+        b.addEventListener("click", function () {
+          UI.$$("[data-npreset]", m.el).forEach(function (x) { x.classList.toggle("active", x === b); });
+          pkgChoice = b.dataset.npreset;
+          if (pkgChoice !== "none" && pkgChoice !== "custom") {
+            var x = presets[+pkgChoice];
+            m.$("#newPkgBox [name=units]").value = x.units; m.$("#newPkgBox [name=unitType]").value = x.unitType;
+            m.$("#newPkgBox [name=price]").value = x.price;
+          }
+          pkgView();
+          if (pkgChoice === "custom") m.$("#newPkgBox [name=units]").focus();
+        });
+      });
+      UI.$$("#newPkgBox input, #newPkgBox select", m.el).forEach(function (el) { el.addEventListener("input", pkgView); });
+      pkgView();
+    }
     m.$("[data-save]").addEventListener("click", async function () {
       var d = UI.formData(m.$("#clientFormBox"));
+      var pkg = null;
+      if (offerPkg && d.pricingModel === "package" && pkgChoice && pkgChoice !== "none") {
+        pkg = UI.formData(m.$("#newPkgBox"));
+        if (!(C.num(pkg.units) > 0)) { UI.toast("יש להזין כמות לסל", true); return; }
+        if (!(C.num(pkg.price) > 0)) { UI.toast("יש להזין מחיר לסל", true); return; }
+        if (C.num(pkg.discount) > C.num(pkg.price)) { UI.toast("ההנחה גדולה ממחיר הסל", true); return; }
+        var preset = presets[+pkgChoice];
+        pkg.name = preset && C.num(preset.units) === C.num(pkg.units) && preset.unitType === pkg.unitType ? (preset.name || C.packageName(pkg.units, pkg.unitType)) : C.packageName(pkg.units, pkg.unitType);
+        if (!pkg.discount) delete pkg.discount;
+      }
       if (!d.name) { UI.toast("יש להזין שם", true); return; }
       if (C.num(d.discount) > C.num(d.rate) && C.num(d.rate) > 0) { UI.toast("ההנחה גדולה מהמחיר", true); return; }
       if (d.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)) { UI.toast("כתובת המייל אינה תקינה", true); return; }
+      if (d.pricingModel === "monthly" && !(C.num(d.monthlyFee) > 0)) { UI.toast("יש להזין את התשלום החודשי", true); return; }
+      if (d.monthlyStart && d.monthlyEnd && d.monthlyEnd < d.monthlyStart) { UI.toast("חודש הסיום לפני חודש ההתחלה", true); return; }
       d.id = c.id || C.uid("cl");
       if (!c.id) d.createdAt = C.ymd(new Date());
       m.close();
-      await App.save("clients", [d]);
+      if (!(await App.save("clients", [d], pkg ? { toast: false } : undefined))) return;
+      if (pkg) {
+        pkg.id = C.uid("pa"); pkg.clientId = d.id; pkg.startDate = C.ymd(new Date());
+        await App.save("packages", [pkg], { msg: "נשמר, כולל " + pkg.name });
+      }
       if (!c.id) location.hash = "#biz/client/" + d.id;
     });
   }
@@ -323,6 +398,7 @@
           return h`<div class="pkg ${p.remaining <= 0 ? "done" : ""}"><div class="row between"><b>${p.name}</b><span class="small muted">${C.fmtDate(p.startDate)} · ${C.fmtMoney(p.price)}${p.discount > 0 ? " (אחרי הנחה " + C.fmtMoney(p.discount) + ")" : ""}</span></div>
             <div class="row between small" style="margin:6px 0"><span>נוצלו <b>${r2(p.used)}</b> מתוך ${r2(p.units)} ${unitLabel(p.unitType)}</span><span>נותרו <b class="${p.remaining <= C.num(App.settings().renewalThreshold) ? "t-bad" : ""}">${r2(p.remaining)}</b></span></div>
             ${UI.bar(p.units ? p.used / p.units : 0)}
+            <div class="row small" style="margin-top:6px;gap:12px;flex-wrap:wrap"><span>שולם <b class="${p.unpaid > 0 ? "t-bad" : ""}">${C.fmtMoney(p.paid)}</b>${p.unpaid > 0 ? " (חסר " + C.fmtMoney(p.unpaid) + ")" : " ✓"}</span><span>נוצל ${C.fmtMoney(p.valueUsed)}</span><span>נשאר זיכוי <b>${C.fmtMoney(p.credit)}</b></span></div>
             <div class="row" style="margin-top:6px"><button class="btn btn-ghost btn-xs" data-act="editPackage" data-id="${p.id}">עריכה</button><button class="btn btn-ghost btn-xs" data-act="delRow" data-table="packages" data-id="${p.id}">מחיקה</button></div></div>`;
         }) : h`<div class="empty">אין סלים. ${a.model === "single" ? "הלקוח מחויב לפי פגישה." : ""}</div>`}
         ${a.overflowUnits > 0 && a.packages.length ? h`<p class="small muted" style="margin-top:8px">${r2(a.overflowUnits)} יח' מעבר לסלים חויבו לפי ${C.fmtMoney(C.effectiveRate(c))} ליחידה.</p>` : ""}
@@ -406,7 +482,8 @@
         <dt>שם</dt><dd>${c.name}</dd><dt>מספר לקוח</dt><dd>${c.code || "—"}</dd><dt>טלפון</dt><dd class="ltr">${c.phone || "—"}</dd><dt>אימייל</dt><dd class="ltr">${c.email || "—"}</dd>
         <dt>גורם מפנה</dt><dd>${c.referrer || "—"}</dd><dt>הסדר תשלום</dt><dd>${C.PRICING_MODELS[c.pricingModel || "single"]}</dd>
         <dt>מחיר ליחידה</dt><dd>${rateText(c)}</dd>
-        ${c.pricingModel === "monthly" ? h`<dt>תשלום חודשי</dt><dd>${C.fmtMoney(c.monthlyFee)}</dd>` : ""}
+        ${c.pricingModel === "monthly" ? h`<dt>תשלום חודשי</dt><dd>${C.fmtMoney(c.monthlyFee)} לחודש (מה-1 עד סוף החודש)</dd>
+          <dt>תקופת הליווי</dt><dd>${c.monthlyStart ? "מ" + C.monthLabel(String(c.monthlyStart).slice(0, 7)) : "מהפגישה הראשונה"}${c.monthlyEnd ? " עד " + C.monthLabel(String(c.monthlyEnd).slice(0, 7)) : " - נמשך"}</dd>` : ""}
         <dt>שם התהליך</dt><dd>${c.processName || "—"}</dd><dt>מילת זיהוי ביומן</dt><dd>${c.calendarKeyword || "—"}</dd>
         <dt>נוצר</dt><dd>${C.fmtDate(c.createdAt) || "—"}</dd>
       </dl>${c.notes ? h`<div class="small pre" style="margin-top:12px;padding:10px;background:var(--cream);border-radius:10px">🔒 ${c.notes}</div>` : ""}</div>
@@ -505,6 +582,7 @@
     var patch = { id: tgt.id }, changed = false;
     ["phone", "email", "referrer", "processName", "calendarKeyword", "code"].forEach(function (k) { if (!tgt[k] && src[k]) { patch[k] = src[k]; changed = true; } });
     if (src.notes && String(tgt.notes || "").indexOf(src.notes) === -1) { patch.notes = (tgt.notes ? tgt.notes + " | " : "") + src.notes; changed = true; }
+    if (tgt.status === "inactive" && src.status !== "inactive") { patch.status = src.status || "active"; changed = true; }
     var opt = { toast: false, silent: true };
     if (changed && !(await App.save("clients", [patch], opt))) return false;
     if (ops.delSessions.length && !(await App.remove("sessions", ops.delSessions))) return false;
@@ -686,6 +764,13 @@
     });
   }
   Actions.newPackage = function (t) { packageForm(t.dataset.client); };
+  // The client finished: no more renewal alerts or reminder e-mails. All history stays.
+  Actions.finishClient = async function (t) {
+    var c = App.client(t.dataset.client);
+    if (!c) return;
+    if (!(await UI.confirm("סיום תהליך - " + c.name, "הלקוח יסומן כ\"לא פעיל\": לא תופיע יותר התראת חידוש סל, ולא יישלחו אליו תזכורות. כל ההיסטוריה (פגישות, תשלומים, יתרה) נשמרת. אם יחזור - אפשר להחזיר ל\"פעיל\" בפרטי הלקוח, או פשוט לשייך אליו פגישה חדשה.", "סיום התהליך"))) return;
+    App.save("clients", [{ id: c.id, status: "inactive" }], { msg: c.name + " סומן כמי שסיים את התהליך" });
+  };
   Actions.editPackage = function (t) { var p = C.byId(App.db.packages, t.dataset.id); packageForm(p.clientId, p); };
 
   Actions.newCharge = function (t) {
@@ -785,6 +870,7 @@
       if (!d.date) { UI.toast("יש לבחור מועד", true); return; }
       d.id = s.id;
       if (isNew) d.source = "manual";
+      else if (d.clientId !== s.clientId) d.clientLocked = "true";   // chosen by hand: the calendar sync keeps it
       var createEvents = d.addToCalendar === "true";
       if (!createEvents) delete d.addToCalendar;
       m.close();
@@ -792,9 +878,20 @@
     });
     var del = m.$("[data-del]");
     if (del) del.addEventListener("click", async function () {
-      var alsoCal = !!s.calendarEventId;
-      if (!(await UI.confirm("מחיקת פגישה", alsoCal ? "הפגישה תימחק גם מיומן Google. אם היא בוטלה - עדיף לסמן 'בוטלה' במקום למחוק." : "למחוק את הפגישה?", "מחיקה", true))) return;
-      m.close(); App.remove("sessions", s.id, { deleteEvent: alsoCal });
+      if (s.calendarEventId) {
+        var q = UI.modal({
+          title: "הפגישה מקושרת ליומן Google",
+          body: h`<p><b>לא פגישה עם לקוח</b> (למשל אירוע משפחתי) - בחרו "הסתרה". האירוע נשאר ביומן, והמערכת לא תציג אותו שוב.</p>
+            <p style="margin-top:8px"><b>פגישה שבוטלה</b> - עדיף לסמן "בוטלה בזמן" או "בוטלה באיחור" בסטטוס.</p>
+            <p class="small muted" style="margin-top:8px">"מחיקה מהיומן" מוחקת את האירוע גם מיומן Google.</p>`,
+          foot: h`<button class="btn btn-primary" data-hide>הסתרה (היומן לא משתנה)</button><button class="btn btn-bad" data-delcal>מחיקה מהמערכת ומהיומן</button><button class="btn btn-outline" data-close>ביטול</button>`
+        });
+        q.$("[data-hide]").addEventListener("click", function () { q.close(); m.close(); Actions.hideSession({ dataset: { id: s.id } }); });
+        q.$("[data-delcal]").addEventListener("click", function () { q.close(); m.close(); App.remove("sessions", s.id, { deleteEvent: true }); });
+        return;
+      }
+      if (!(await UI.confirm("מחיקת פגישה", "למחוק את הפגישה?", "מחיקה", true))) return;
+      m.close(); App.remove("sessions", s.id);
     });
   }
   Actions.newSession = function (t) { sessionForm({ clientId: t.dataset.client || "" }); };
@@ -814,7 +911,7 @@
       return true;
     }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
     var bm = ui.sessMonth !== "all" ? C.businessMonth(db, ui.sessMonth) : null;
-    var clients = (db.clients || []).filter(function (c) { return c.status !== "inactive"; }).sort(function (a, b) { return String(a.name).localeCompare(String(b.name), "he"); });
+    var clients = (db.clients || []).slice().sort(function (a, b) { return ((a.status === "inactive") - (b.status === "inactive")) || String(a.name).localeCompare(String(b.name), "he"); });
     return h`<div class="page-head"><div><h1>יומן פגישות</h1><div class="sub">מסונכרן עם Google Calendar${App.meta.lastSync ? " · עודכן " + C.fmtDate(App.meta.lastSync) + " " + C.fmtTime(App.meta.lastSync) : ""}</div></div>
       <div class="row"><button class="btn btn-outline btn-sm" data-act="syncCal">⟳ סנכרון עכשיו</button><button class="btn btn-primary btn-sm" data-act="newSession">+ פגישה</button></div></div>
     ${awaiting.length ? h`<div class="card"><div class="card-title"><h3>ממתינות לאישור סטטוס (${awaiting.length})</h3><span class="sub">אחרי שהפגישה עברה - לסמן מה קרה. "התקיימה" ו"בוטלה באיחור" מורידות יחידה מהסל או מוסיפות חיוב.</span></div>
@@ -822,7 +919,7 @@
     ${unassigned.length ? h`<div class="card section"><div class="card-title"><h3>אירועי יומן שלא זוהו (${unassigned.length})</h3><span class="sub">בחרו לקוח לשיוך, או הסתירו אירוע שאינו פגישה</span></div>
       <div class="alist">${unassigned.map(function (s) {
         return h`<div class="aitem"><span class="who">${s.calendarTitle || "(ללא כותרת)"}</span><span class="when">${UI.when(s.date)}</span>
-          <span class="acts"><select data-change="assignSession" data-id="${s.id}" style="width:auto;min-height:32px;padding:4px 8px;font-size:13px">${UI.options(clients.map(function (c) { return [c.id, c.name]; }), "", "שיוך ללקוח...")}</select>
+          <span class="acts"><select data-change="assignSession" data-id="${s.id}" style="width:auto;min-height:32px;padding:4px 8px;font-size:13px">${UI.options(clients.map(function (c) { return [c.id, c.name + (c.status === "inactive" ? " (לא פעיל)" : "")]; }), "", "שיוך ללקוח...")}</select>
           <button class="btn btn-ghost btn-xs" data-act="ignoreSession" data-id="${s.id}">הסתרה</button></span></div>`;
       })}</div></div>` : ""}
     <div class="card section">
@@ -837,7 +934,10 @@
     if (!t.value) return;
     var s = C.byId(App.db.sessions, t.dataset.id);
     var nowStr = C.ymdhm(new Date());
-    App.save("sessions", [{ id: s.id, clientId: t.value, status: "planned" }], { msg: "שויך" + (s.date < nowStr ? " - כעת אפשר לאשר את הסטטוס" : "") });
+    var c = App.client(t.value);
+    App.save("sessions", [{ id: s.id, clientId: t.value, status: "planned", clientLocked: "true" }], { msg: "שויך" + (s.date < nowStr ? " - כעת אפשר לאשר את הסטטוס" : "") });
+    // a new meeting means the client is back: active again, so future meetings are recognised automatically
+    if (c && c.status === "inactive") App.save("clients", [{ id: c.id, status: "active" }], { msg: c.name + " סומן שוב כלקוח פעיל" });
   };
   Actions.ignoreSession = function (t) { App.save("sessions", [{ id: t.dataset.id, status: "ignored" }], { toast: false }); };
 
@@ -1092,3 +1192,4 @@
     UI.$$("[data-pick-edit]", m.el).forEach(function (b) { b.addEventListener("click", function () { m.close(); summaryForm(b.dataset.pickEdit); }); });
   };
 })();
+

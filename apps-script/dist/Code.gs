@@ -295,13 +295,12 @@ var Core = (function () {
     var chargeLines = [];
     packages.forEach(function (p) {
       chargeLines.push({ date: p.startDate, label: (p.name || "סל") + (p.discount > 0 ? " (" + fmtMoney(p.listPrice) + " פחות הנחה " + fmtMoney(p.discount) + ")" : ""),
-        amount: p.price, kind: "package" });
+        amount: p.price, kind: "package", packageId: p.id });
     });
     if (model === "monthly") {
-      var months = {};
-      overflowSessions.forEach(function (s) { if (s.date) months[monthKey(s.date)] = true; });
-      Object.keys(months).sort().forEach(function (mk) {
-        chargeLines.push({ date: mk + "-01", label: "ליווי חודשי - " + monthLabel(mk), amount: num(client.monthlyFee), kind: "monthly" });
+      monthlyMonths(client, overflowSessions, now).forEach(function (mk) {
+        chargeLines.push({ date: mk + "-01", label: "ליווי חודשי - " + monthLabel(mk) + " (1-" + daysInMonth(mk) + " בחודש)",
+          amount: num(client.monthlyFee), kind: "monthly" });
       });
     } else {
       overflowSessions.forEach(function (s) {
@@ -325,6 +324,23 @@ var Core = (function () {
 
     var totalCharges = round2(chargeLines.reduce(function (s, c) { return s + c.amount; }, 0));
     var totalPaid = round2(payments.reduce(function (s, p) { return s + num(p.amount); }, 0));
+
+    // Payments cover the charges in date order, so each package knows how much of it is paid.
+    var pool = totalPaid, paidByPkg = {};
+    chargeLines.forEach(function (l) {
+      if (l.amount <= 0) { pool += -l.amount; return; }
+      var take = Math.max(0, Math.min(pool, l.amount)); pool -= take;
+      if (l.packageId) paidByPkg[l.packageId] = round2(take);
+    });
+    // The package as a credit: its price spread over its units.
+    packages.forEach(function (p) {
+      var per = p.units > 0 ? p.price / p.units : 0;
+      p.unitValue = round2(per);
+      p.valueUsed = round2(per * p.used);
+      p.credit = round2(per * p.remaining);
+      p.paid = paidByPkg[p.id] || 0;
+      p.unpaid = round2(Math.max(0, p.price - p.paid));
+    });
 
     var unitsPurchased = packages.reduce(function (s, p) { return s + p.units; }, 0);
     var unitsUsedInPkgs = packages.reduce(function (s, p) { return s + p.used; }, 0);
@@ -370,6 +386,25 @@ var Core = (function () {
       awaiting: awaiting,
       lastHeld: held.length ? held[held.length - 1] : null
     };
+  }
+
+  /*
+   * Months billed on the monthly model: a fixed fee for every calendar month (the 1st
+   * to the last day) from the start month to the end month, or to the current month
+   * while the accompaniment is ongoing. Without a start month, it starts at the first
+   * meeting. A meeting outside that period still counts its own month.
+   */
+  function monthlyMonths(client, sessions, now) {
+    var months = {};
+    (sessions || []).forEach(function (s) { if (s.date) months[monthKey(s.date)] = true; });
+    var first = Object.keys(months).sort()[0] || "";
+    var start = /^\d{4}-\d{2}/.test(client.monthlyStart || "") ? String(client.monthlyStart).slice(0, 7) : first;
+    var end = thisMonth(now || new Date());
+    if (/^\d{4}-\d{2}/.test(client.monthlyEnd || "") && String(client.monthlyEnd).slice(0, 7) < end) end = String(client.monthlyEnd).slice(0, 7);
+    // an inactive client with no end month set is not charged after the last meeting
+    if (client.status === "inactive" && !client.monthlyEnd) { var last = Object.keys(months).sort().pop() || start; if (last < end) end = last; }
+    if (start) for (var mk = start, guard = 0; mk <= end && guard < 600; mk = addMonths(mk, 1), guard++) months[mk] = true;
+    return Object.keys(months).sort();
   }
 
   function allAccounts(db, now) {
@@ -602,6 +637,10 @@ var Core = (function () {
         purchased: pkg ? pkg.units : 0,
         used: pkg ? pkg.used : 0,
         remaining: pkg ? pkg.remaining : 0,
+        price: pkg ? pkg.price : 0,
+        paid: pkg ? pkg.paid : 0,
+        valueUsed: pkg ? pkg.valueUsed : 0,
+        credit: pkg ? pkg.credit : 0,
         heldCount: acc.heldCount,
         hoursTotal: acc.hoursTotal
       },
@@ -619,19 +658,37 @@ var Core = (function () {
     return String(name || "").replace(/[-–(),.'"]/g, " ").split(/\s+/)
       .filter(function (w) { return w.length >= 2 && ["זוגי", "בחור", "הרצאה"].indexOf(w) === -1; });
   }
-  // Match a calendar event title to a client (all name tokens present, or custom keyword).
+  // Hebrew spelling variants count as the same word: "וורצברגר" = "ורצברגר", "יי" = "י".
+  function normWord(w) {
+    return String(w || "").replace(/[\u0591-\u05C7"'׳״]/g, "").replace(/וו/g, "ו").replace(/יי/g, "י").toLowerCase();
+  }
+  function titleWords(t) {
+    return String(t || "").replace(/[-–(),.:;!?\/\\|]/g, " ").split(/\s+/).filter(Boolean).map(normWord);
+  }
+  /*
+   * Match a calendar event title to a client: every word of the client's name must
+   * appear as a whole word in the title (so "לוי" does not match inside "וואלוי"),
+   * or the client's own calendar keyword appears. If two clients match equally
+   * well, nobody is chosen - the event waits for a manual pick.
+   */
   function matchClient(clients, title) {
-    var t = String(title || "");
-    var best = null, bestScore = 0;
+    var t = String(title || ""), words = titleWords(t);
+    var best = null, bestScore = 0, tie = false;
     (clients || []).forEach(function (c) {
       if (c.status === "inactive") return;
-      if (c.calendarKeyword && t.indexOf(c.calendarKeyword) !== -1) { if (100 > bestScore) { best = c; bestScore = 100; } return; }
-      var toks = nameTokens(c.name);
-      if (!toks.length) return;
-      var hits = toks.filter(function (w) { return t.indexOf(w) !== -1; }).length;
-      if (hits === toks.length && hits > bestScore) { best = c; bestScore = hits; }
+      var score = 0;
+      if (c.calendarKeyword && t.indexOf(c.calendarKeyword) !== -1) score = 1000 + String(c.calendarKeyword).length;
+      else {
+        var toks = nameTokens(c.name).map(normWord);
+        if (!toks.length) return;
+        var all = toks.every(function (w) { return words.indexOf(w) !== -1; });
+        if (!all) return;
+        score = toks.length * 100 + toks.join("").length;
+      }
+      if (score > bestScore) { best = c; bestScore = score; tie = false; }
+      else if (score === bestScore && best && best.id !== c.id) tie = true;
     });
-    return best;
+    return tie ? null : best;
   }
 
   function escapeHtml(s) {
@@ -650,7 +707,7 @@ var Core = (function () {
     thisMonth: thisMonth, addMonths: addMonths, daysInMonth: daysInMonth, fmtDate: fmtDate, fmtTime: fmtTime,
     fmtMoney: fmtMoney, monthLabel: monthLabel, byId: byId, bool: bool, settingsOf: settingsOf,
     monthlySessionTarget: monthlySessionTarget, sessionUnits: sessionUnits, sessionsOf: sessionsOf,
-    clientAccount: clientAccount, allAccounts: allAccounts, expensesForMonth: expensesForMonth,
+    clientAccount: clientAccount, allAccounts: allAccounts, monthlyMonths: monthlyMonths, expensesForMonth: expensesForMonth,
     businessMonth: businessMonth, kpi: kpi, categorize: categorize, familyMonth: familyMonth,
     loansSummary: loansSummary, txFingerprint: txFingerprint, freeSlots: freeSlots, hmToMin: hmToMin,
     minToHm: minToHm, portalView: portalView, nameTokens: nameTokens, matchClient: matchClient, escapeHtml: escapeHtml
@@ -819,8 +876,11 @@ var EmailTemplates = (function () {
       ["פגישות שהתקיימו", String(a.heldCount)]
     ];
     if (pkg) {
-      rows.push(["נוצלו מהסל הנוכחי", Core.round2(pkg.used) + " מתוך " + Core.round2(pkg.units) + " " + unit]);
-      rows.push(["נותרו בסל", Core.round2(pkg.remaining) + " " + unit]);
+      rows.push(["הסל שלך", esc(pkg.name || Core.packageName(pkg.units, pkg.unitType))]);
+      rows.push(["מחיר הסל", money(pkg.price) + (pkg.discount > 0 ? " (אחרי הנחה " + money(pkg.discount) + ")" : "")]);
+      rows.push(["שולם עבור הסל", money(pkg.paid) + (pkg.unpaid > 0 ? " - נותר לתשלום " + money(pkg.unpaid) : " ✓"), pkg.unpaid > 0 ? C.warn : C.good]);
+      rows.push(["נוצלו מהסל", Core.round2(pkg.used) + " מתוך " + Core.round2(pkg.units) + " " + unit + " (" + money(pkg.valueUsed) + ")"]);
+      rows.push(["נשאר זיכוי בסל", Core.round2(pkg.remaining) + " " + unit + " (" + money(pkg.credit) + ")", C.good]);
     }
     rows.push(["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]);
     var dates = a.sessions.filter(function (s) { return Core.CONSUMING[s.status]; }).map(function (s) { return Core.fmtDate(s.date); }).filter(Boolean);
@@ -855,7 +915,7 @@ var EmailTemplates = (function () {
       (sm.homework ? heading("שיעורי בית") + box(structured(sm.homework), "#FFFDF8") : "") +
       (a ? heading("מצב התהליך") + kvTable([
         ["פגישות שהתקיימו", String(a.heldCount)],
-        pkg ? ["נותרו בסל", Core.round2(pkg.remaining) + " " + (pkg.unitType === "hour" ? "שעות" : "פגישות")] : ["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]
+        pkg ? ["נשאר זיכוי בסל", Core.round2(pkg.remaining) + " מתוך " + Core.round2(pkg.units) + " " + (pkg.unitType === "hour" ? "שעות" : "פגישות") + " (" + money(pkg.credit) + ")"] : ["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]
       ]) + (pkg ? progress(pkg.used, pkg.units) : "") : "") +
       (a && a.nextSession ? para('<br>הפגישה הבאה: <strong>' + esc(when(a.nextSession.date)) + '</strong>') : button("קביעת הפגישה הבאה", x.bookingUrl || x.portalUrl));
     return { subject: "סיכום הפגישה" + (s.date ? " - " + Core.fmtDate(s.date) : ""), html: layout(x.st, "סיכום, החלטות ושיעורי בית", "סיכום הפגישה שלנו", body) };
@@ -1607,10 +1667,18 @@ function syncCalendar() {
     var loc = ev.getLocation() || "";
     if (s) {
       if (s.status === "planned" || s.status === "unassigned") {
+        var ch = null;
         if (s.date !== start || String(s.durationMin) !== String(dur) || (loc && s.location !== loc) || s.calendarEventId !== key) {
-          changes.push({ id: s.id, date: start, durationMin: dur, location: loc || s.location, calendarEventId: key, calendarTitle: title });
-          updated++;
+          ch = { id: s.id, date: start, durationMin: dur, location: loc || s.location, calendarEventId: key, calendarTitle: title };
         }
+        // Undo assignments made by the old matcher's bug (part of a word counted as a
+        // name, e.g. "לוי" inside "וואלוי"): only when the old rule explains the current
+        // client and the new rule finds a different one. Manual choices are never touched.
+        if (s.source === "calendar" && !Core.bool(s.clientLocked) && s.clientId) {
+          var m = Core.matchClient(d.clients, title), old = oldSubstringMatch(d.clients, title);
+          if (m && old && old.id === s.clientId && m.id !== s.clientId) { ch = ch || { id: s.id }; ch.clientId = m.id; ch.status = "planned"; }
+        }
+        if (ch) { changes.push(ch); updated++; }
       }
       return;
     }
@@ -1633,6 +1701,21 @@ function syncCalendar() {
   if (changes.length) upsertRows("sessions", changes);
   PropertiesService.getScriptProperties().setProperty("LAST_SYNC", Core.ymdhm(new Date()));
   return { ok: true, added: added, updated: updated, cancelled: cancelled, unmatched: unmatched };
+}
+
+// The matching rule used before November 2026 (substring based). Kept only to recognise
+// which existing assignments it produced, so they can be corrected safely.
+function oldSubstringMatch(clients, title) {
+  var t = String(title || ""), best = null, bestScore = 0;
+  (clients || []).forEach(function (c) {
+    if (c.status === "inactive") return;
+    if (c.calendarKeyword && t.indexOf(c.calendarKeyword) !== -1) { if (100 > bestScore) { best = c; bestScore = 100; } return; }
+    var toks = Core.nameTokens(c.name);
+    if (!toks.length) return;
+    var hits = toks.filter(function (w) { return t.indexOf(w) !== -1; }).length;
+    if (hits === toks.length && hits > bestScore) { best = c; bestScore = hits; }
+  });
+  return best;
 }
 
 var STATUS_COLOR = { held: "10", cancel_ontime: "8", cancel_late: "11", planned: "" }; // green, gray, red

@@ -85,7 +85,8 @@
     <section class="block" aria-labelledby="b1"><div class="block-h"><span class="n">1</span><h2 id="b1">איפה אני בדרך</h2></div>
       <div class="small muted">${v.client.processName}${p.packageName ? " · " + p.packageName : ""}</div>
       ${hasPkg ? h`<div class="prog-line" style="margin-top:10px"><span>${unit(p.unitType)}: <b>${C.round2(p.used)}</b> מתוך ${C.round2(p.purchased)}</span><span>נותרו: <b>${C.round2(p.remaining)}</b></span></div>
-        ${UI.bar(p.purchased ? p.used / p.purchased : 0, "big")}` : h`<div class="prog-line" style="margin-top:10px"><span>פגישות שהתקיימו: <b>${p.heldCount}</b></span></div>`}
+        ${UI.bar(p.purchased ? p.used / p.purchased : 0, "big")}
+        ${p.price > 0 ? h`<div class="row small" style="margin-top:8px;gap:14px;flex-wrap:wrap"><span>מחיר הסל: <b>${C.fmtMoney(p.price)}</b></span><span>שולם: <b>${C.fmtMoney(p.paid)}</b></span><span>נוצל: <b>${C.fmtMoney(p.valueUsed)}</b></span><span>נשאר זיכוי: <b style="color:var(--good,#4C7A5E)">${C.fmtMoney(p.credit)}</b></span></div>` : ""}` : h`<div class="prog-line" style="margin-top:10px"><span>פגישות שהתקיימו: <b>${p.heldCount}</b></span></div>`}
       <div class="row small muted" style="margin-top:8px"><span>סה"כ פגישות: ${p.heldCount}</span><span>·</span><span>שעות: ${p.hoursTotal}</span></div>
       <div class="next"><span>📅</span><span>הפגישה הבאה: <b>${v.nextSession ? when(v.nextSession.date) : "עדיין לא נקבעה"}</b>${v.nextSession && v.nextSession.location ? " · " + v.nextSession.location : ""}</span>
         ${!v.nextSession ? h`<a class="btn btn-outline btn-sm" href="#book" id="goBook">לקבוע פגישה</a>` : ""}</div>

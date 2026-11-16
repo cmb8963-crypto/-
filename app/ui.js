@@ -113,10 +113,21 @@ var UI = (function () {
 
   // Only http(s) links are ever rendered as href.
   function safeUrl(u) { u = String(u || "").trim(); return /^https?:\/\//i.test(u) ? u : ""; }
+  // Day of the month in Hebrew letters: 6 -> ו׳, 15 -> ט״ו, 22 -> כ״ב.
+  function gematria(n) {
+    var ones = ["", "א", "ב", "ג", "ד", "ה", "ו", "ז", "ח", "ט"], tens = ["", "י", "כ", "ל"];
+    var s = n === 15 ? "טו" : n === 16 ? "טז" : tens[Math.floor(n / 10)] + ones[n % 10];
+    return s.length === 1 ? s + "׳" : s.slice(0, -1) + "״" + s.slice(-1);
+  }
+  // Hebrew date in letters, e.g. "ח׳ כסלו", "כ״ב תשרי".
   function hebDate(ymd) {
     try {
       var d = C.toDate(ymd); if (!d) return "";
-      return new Intl.DateTimeFormat("he-IL-u-ca-hebrew", { day: "numeric", month: "long" }).format(d);
+      var parts = new Intl.DateTimeFormat("he-IL-u-ca-hebrew", { day: "numeric", month: "long" }).formatToParts(d);
+      var day = 0, month = "";
+      parts.forEach(function (p) { if (p.type === "day") day = +p.value; if (p.type === "month") month = p.value; });
+      if (!day || !month) return new Intl.DateTimeFormat("he-IL-u-ca-hebrew", { day: "numeric", month: "long" }).format(d);
+      return gematria(day) + " " + month;
     } catch (e) { return ""; }
   }
   function when(s) {
