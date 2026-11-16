@@ -548,14 +548,14 @@
       <form id="regForm" novalidate>
         <div class="form-fields">
           <div class="field" id="field-name">
-            <label for="regName">שם פרטי</label>
-            <input type="text" id="regName" name="name" autocomplete="given-name" required>
-            <div class="err">נא להזין שם</div>
+            <label for="regName">שם מלא (פרטי ומשפחה)</label>
+            <input type="text" id="regName" name="name" autocomplete="name" placeholder="לדוגמה: דני כהן" required>
+            <div class="err">נא להזין שם פרטי ושם משפחה</div>
           </div>
           <div class="field" id="field-phone">
-            <label for="regPhone">טלפון</label>
+            <label for="regPhone">טלפון נייד</label>
             <input type="tel" id="regPhone" name="phone" autocomplete="tel" inputmode="tel" placeholder="050-1234567" required>
-            <div class="err">נא להזין מספר טלפון תקין</div>
+            <div class="err">נא להזין מספר טלפון נייד תקין</div>
           </div>
           <div class="field" id="field-email">
             <label for="regEmail">כתובת מייל</label>
@@ -807,8 +807,12 @@
 
   function digitsOnly(s) { return (s || "").replace(/\D/g, ""); }
   function isValidPhone(s) {
-    const d = digitsOnly(s);
-    return d.length >= 9 && d.length <= 10;
+    const d = digitsOnly(s).replace(/^972/, "0");
+    return /^05\d{8}$/.test(d);
+  }
+  function isValidFullName(s) {
+    const parts = (s || "").trim().split(/\s+/).filter(Boolean);
+    return parts.length >= 2 && parts.every(function (p) { return p.length >= 2; });
   }
   function isValidEmail(s) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((s || "").trim());
@@ -820,7 +824,7 @@
 
   regForm.addEventListener("submit", function (e) {
     e.preventDefault();
-    const nameValid = regName.value.trim().length > 0;
+    const nameValid = isValidFullName(regName.value);
     const phoneValid = isValidPhone(regPhone.value);
     const emailValid = isValidEmail(regEmail.value);
     const consentEl = document.getElementById("newsletterConsent");
