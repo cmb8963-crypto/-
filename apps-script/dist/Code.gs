@@ -275,6 +275,7 @@ var Core = (function () {
       var assigned = false;
       while (pi < packages.length) {
         var p = packages[pi];
+        if (String(p.startDate || "") > String(s.date || "").slice(0, 10)) break; // package starts later than this session - leave it unassigned (overflow) rather than skip past a package that will still apply to later sessions
         var need = p.unitType === "hour" ? num(s.durationMin || 60) / 60 : 1;
         if (s.units !== undefined && s.units !== "" && s.units !== null && p.unitType === (client.unitType || "session")) need = num(s.units);
         if (p.remaining > 0.0001) {
