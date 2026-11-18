@@ -867,6 +867,7 @@
         <label class="field"><span>מיקום</span><input type="text" name="location" value="${s.location || locs[0] || ""}" list="locList"><datalist id="locList">${locs.map(function (l) { return h`<option value="${l}">`; })}</datalist></label>
         <label class="field"><span>סטטוס</span><select name="status">${UI.options(["planned", "held", "cancel_ontime", "cancel_late"].map(function (k) { return [k, C.SESSION_STATUS[k]]; }), s.status || "planned")}</select></label>
         <label class="field"><span>יחידות חיוב (ריק = אוטומטי)</span><input type="number" name="units" value="${s.units}" min="0" step="0.25" placeholder="אוטומטי"></label>
+        <label class="field"><span>מחיר קבוע לפגישה זו (עוקף סל/תעריף, ריק = רגיל)</span><input type="number" name="price" value="${s.price}" min="0" step="0.5" placeholder="רגיל"></label>
         ${isNew || !s.calendarEventId ? h`<label class="check span-2"><input type="checkbox" name="addToCalendar" checked> להוסיף ליומן Google</label>` : h`<div class="span-2 small muted">📅 מסונכרן ליומן Google - שינוי מועד יעודכן גם ביומן</div>`}
         <label class="field span-2"><span>הערות</span><input type="text" name="notes" value="${s.notes}"></label></div>`,
       foot: h`<button class="btn btn-primary" data-save>שמירה</button>${!isNew ? h`<button class="btn btn-bad" data-del>מחיקה</button>` : ""}<button class="btn btn-outline" data-close>ביטול</button>`
