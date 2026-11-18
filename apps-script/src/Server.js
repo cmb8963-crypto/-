@@ -91,6 +91,7 @@ function setup() {
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
   ScriptApp.newTrigger("syncCalendarJob").timeBased().everyMinutes(15).create();
   ScriptApp.newTrigger("dailyJob").timeBased().everyDays(1).atHour(6).create();
+  ScriptApp.newTrigger("sendWeeklyKpiEmail").timeBased().everyDays(1).atHour(9).create();
 
   var code = props.getProperty("SETUP_CODE");
   if (!props.getProperty("ADMIN_HASH")) {
@@ -944,6 +945,51 @@ function dailyJob() {
     });
   }
   if (digest.length) notifyAdmin("סיכום יומי", digest.join("\n") + "\n\n" + st.siteUrl + "/app/");
+}
+
+// ======================================================================= weekly KPI e-mail
+/**
+ * Run once from the Apps Script editor (select "installWeeklyKpiEmailTrigger"
+ * and press Run) to start the 9:00 daily e-mail. Safe to run again - it only
+ * adds the trigger if it isn't already installed.
+ */
+function installWeeklyKpiEmailTrigger() {
+  var already = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === "sendWeeklyKpiEmail"; });
+  if (already) { Logger.log("הטריגר כבר מותקן."); return; }
+  ScriptApp.newTrigger("sendWeeklyKpiEmail").timeBased().everyDays(1).atHour(9).create();
+  Logger.log("✔ הותקן - יישלח מייל יומי בשעה 9:00.");
+  sendWeeklyKpiEmail();
+}
+
+function sendWeeklyKpiEmail() {
+  _tableCache = {};
+  var d = loadDb();
+  var now = new Date();
+  var k = Core.kpi(d, now);
+  var PACE = {
+    done: { label: "הושלם", color: "#2e7d32" },
+    good: { label: "בקצב טוב", color: "#2e7d32" },
+    warn: { label: "קרוב לקצב", color: "#e08a00" },
+    behind: { label: "מאחורי הקצב", color: "#c0392b" }
+  };
+  var pace = PACE[k.weeklyPace] || PACE.behind;
+  var pct = Math.round(Math.min(1, k.weeklyPct) * 100);
+  var html = "" +
+    '<div dir="rtl" style="font-family:Arial,Helvetica,sans-serif;max-width:360px;margin:0 auto;background:#fff">' +
+    '<div style="background:#fbf7f1;border:1px solid #e7ddd0;border-radius:14px;padding:18px 20px">' +
+    '<div style="font-size:18px;font-weight:bold;color:#2b2520">ניהול העסק</div>' +
+    '<div style="font-size:13px;color:#8a7e6f;margin:2px 0 14px">' + Core.monthLabel(k.month) + ' · נותרו ' + k.daysLeft + ' ימים בחודש</div>' +
+    '<div style="font-size:14px;color:#5c5346;margin-bottom:10px">פגישות שהתקיימו השבוע</div>' +
+    '<div style="font-size:30px;font-weight:bold;color:#2b2520">' + k.weekHeld + ' <span style="font-size:18px;color:#a79a86;font-weight:normal">/ ' + k.weeklyTarget + '</span>' +
+    '<span style="float:left;font-size:15px;color:#a79a86;font-weight:normal">' + pct + '%</span></div>' +
+    '<div style="clear:both;margin:10px 0 12px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + pace.color + ';margin-left:6px"></span>' +
+    '<span style="font-size:13px;color:' + pace.color + ';font-weight:bold">' + pace.label + '</span></div>' +
+    '<div style="font-size:13px;color:#5c5346">נותרו לעד: ' + k.weekLeft + ' &nbsp;·&nbsp; מתוכננות: ' + k.weekPlanned + '</div>' +
+    '<div style="font-size:13px;color:#a79a86;margin-top:4px">צפוי עד היום: ' + k.expectedWeekByNow + '</div>' +
+    '</div></div>';
+  var st = Core.settingsOf(d);
+  MailApp.sendEmail({ to: Session.getEffectiveUser().getEmail(), subject: "ניהול העסק - " + k.weekHeld + "/" + k.weeklyTarget + " פגישות השבוע",
+    htmlBody: html, body: "פגישות השבוע: " + k.weekHeld + " מתוך " + k.weeklyTarget + ".\n" + (st.siteUrl ? st.siteUrl + "/app/" : "") });
 }
 
 // ======================================================================= legacy import
