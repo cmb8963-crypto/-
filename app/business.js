@@ -48,8 +48,15 @@
           <div class="kpi-big">${k.sessionsHeld}<small> / ${k.sessionTarget}</small></div></div>${UI.ring(k.sessionsPct)}</div>
         ${UI.bar(k.sessionsPct, k.sessionsPace === "behind" ? "bad" : k.sessionsPace === "warn" ? "warn" : "good")}
         <div class="kpi-meta"><span class="pace ${k.sessionsPace}"><i></i>${paceTxt[k.sessionsPace]}</span>
-          <span>נותרו ליעד: <b>${k.sessionsLeft}</b></span><span>צפוי עד היום: <b>${k.expectedSessionsByNow}</b></span>
-          <span>השבוע: <b>${k.weekHeld}</b> התקיימו · <b>${k.weekPlanned}</b> מתוכננות (יעד ${k.weeklyTarget})</span></div>
+          <span>נותרו ליעד: <b>${k.sessionsLeft}</b></span><span>צפוי עד היום: <b>${k.expectedSessionsByNow}</b></span></div>
+      </div>
+      <div class="kpi ${k.weeklyPace}">
+        <div class="kpi-top"><div><div class="kpi-lbl">פגישות שהתקיימו השבוע</div>
+          <div class="kpi-big">${k.weekHeld}<small> / ${k.weeklyTarget}</small></div></div>${UI.ring(k.weeklyPct)}</div>
+        ${UI.bar(k.weeklyPct, k.weeklyPace === "behind" ? "bad" : k.weeklyPace === "warn" ? "warn" : "good")}
+        <div class="kpi-meta"><span class="pace ${k.weeklyPace}"><i></i>${paceTxt[k.weeklyPace]}</span>
+          <span>נותרו ליעד: <b>${k.weekLeft}</b></span><span>מתוכננות: <b>${k.weekPlanned}</b></span>
+          <span>צפוי עד היום: <b>${k.expectedWeekByNow}</b></span></div>
       </div>
       <div class="kpi ${k.incomePace}">
         <div class="kpi-top"><div><div class="kpi-lbl">הכנסה נטו החודש (גבייה בפועל פחות הוצאות)</div>

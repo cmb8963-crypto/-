@@ -482,11 +482,16 @@ var Core = (function () {
     var weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 7);
     var ws = ymd(weekStart), we = ymd(weekEnd);
     var weekSessions = (db.sessions || []).filter(function (s) { return s.clientId && s.date && s.date >= ws && s.date < we; });
+    var weeklyTargetNum = num(st.weeklySessionTarget);
+    var weekElapsed = Math.min(1, Math.max(0, (now - weekStart) / (weekEnd - weekStart)));
+    var expectedWeek = weeklyTargetNum * weekElapsed;
+    var weekHeldCount = weekSessions.filter(function (s) { return s.status === "held"; }).length;
+    var weekPlannedCount = weekSessions.filter(function (s) { return s.status === "planned"; }).length;
     return {
       month: mk,
       bm: bm,
       sessionTarget: sessTarget,
-      weeklyTarget: num(st.weeklySessionTarget),
+      weeklyTarget: weeklyTargetNum,
       sessionsHeld: bm.heldCount,
       sessionsLeft: Math.max(0, sessTarget - bm.heldCount),
       sessionsPct: pctSess,
@@ -498,8 +503,12 @@ var Core = (function () {
       incomeLeft: Math.max(0, incTarget - bm.net),
       incomePct: pctInc,
       incomePace: pace(bm.net, incTarget * elapsed, incTarget),
-      weekHeld: weekSessions.filter(function (s) { return s.status === "held"; }).length,
-      weekPlanned: weekSessions.filter(function (s) { return s.status === "planned"; }).length,
+      weekHeld: weekHeldCount,
+      weekPlanned: weekPlannedCount,
+      weekLeft: Math.max(0, weeklyTargetNum - weekHeldCount),
+      weeklyPct: weeklyTargetNum ? weekHeldCount / weeklyTargetNum : 0,
+      weeklyPace: pace(weekHeldCount, expectedWeek, weeklyTargetNum),
+      expectedWeekByNow: Math.round(expectedWeek),
       daysLeft: dim - now.getDate()
     };
   }
