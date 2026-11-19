@@ -481,8 +481,14 @@ var Core = (function () {
     var weeklyTargetNum = num(st.weeklySessionTarget);
     var weekElapsed = Math.min(1, Math.max(0, (now - weekStart) / (weekEnd - weekStart)));
     var expectedWeek = weeklyTargetNum * weekElapsed;
-    var weekHeldCount = weekSessions.filter(function (s) { return s.status === "held"; }).length;
-    var weekPlannedCount = weekSessions.filter(function (s) { return s.status === "planned"; }).length;
+    // A 2-hour meeting counts as 2 meetings; a late (charged) cancellation still
+    // counts as scheduled, same as a held one - only a free on-time cancellation doesn't.
+    function weekWeight(s) { return num(s.durationMin || 60) / 60; }
+    function weekSum(status) { return round2(weekSessions.filter(function (s) { return s.status === status; }).reduce(function (sum, s) { return sum + weekWeight(s); }, 0)); }
+    var weekHeldW = weekSum("held");
+    var weekCancelLateW = weekSum("cancel_late");
+    var weekPlannedW = weekSum("planned");
+    var weekScheduled = round2(weekHeldW + weekCancelLateW + weekPlannedW);
     return {
       month: mk,
       bm: bm,
@@ -499,11 +505,13 @@ var Core = (function () {
       incomeLeft: Math.max(0, incTarget - bm.net),
       incomePct: pctInc,
       incomePace: pace(bm.net, incTarget * elapsed, incTarget),
-      weekHeld: weekHeldCount,
-      weekPlanned: weekPlannedCount,
-      weekLeft: Math.max(0, weeklyTargetNum - weekHeldCount),
-      weeklyPct: weeklyTargetNum ? weekHeldCount / weeklyTargetNum : 0,
-      weeklyPace: pace(weekHeldCount, expectedWeek, weeklyTargetNum),
+      weekScheduled: weekScheduled,
+      weekHeld: weekHeldW,
+      weekCancelLate: weekCancelLateW,
+      weekPlanned: weekPlannedW,
+      weekLeft: Math.max(0, weeklyTargetNum - weekScheduled),
+      weeklyPct: weeklyTargetNum ? weekScheduled / weeklyTargetNum : 0,
+      weeklyPace: pace(weekScheduled, expectedWeek, weeklyTargetNum),
       expectedWeekByNow: Math.round(expectedWeek),
       daysLeft: dim - now.getDate()
     };

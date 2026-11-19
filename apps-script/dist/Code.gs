@@ -485,8 +485,14 @@ var Core = (function () {
     var weeklyTargetNum = num(st.weeklySessionTarget);
     var weekElapsed = Math.min(1, Math.max(0, (now - weekStart) / (weekEnd - weekStart)));
     var expectedWeek = weeklyTargetNum * weekElapsed;
-    var weekHeldCount = weekSessions.filter(function (s) { return s.status === "held"; }).length;
-    var weekPlannedCount = weekSessions.filter(function (s) { return s.status === "planned"; }).length;
+    // A 2-hour meeting counts as 2 meetings; a late (charged) cancellation still
+    // counts as scheduled, same as a held one - only a free on-time cancellation doesn't.
+    function weekWeight(s) { return num(s.durationMin || 60) / 60; }
+    function weekSum(status) { return round2(weekSessions.filter(function (s) { return s.status === status; }).reduce(function (sum, s) { return sum + weekWeight(s); }, 0)); }
+    var weekHeldW = weekSum("held");
+    var weekCancelLateW = weekSum("cancel_late");
+    var weekPlannedW = weekSum("planned");
+    var weekScheduled = round2(weekHeldW + weekCancelLateW + weekPlannedW);
     return {
       month: mk,
       bm: bm,
@@ -503,11 +509,13 @@ var Core = (function () {
       incomeLeft: Math.max(0, incTarget - bm.net),
       incomePct: pctInc,
       incomePace: pace(bm.net, incTarget * elapsed, incTarget),
-      weekHeld: weekHeldCount,
-      weekPlanned: weekPlannedCount,
-      weekLeft: Math.max(0, weeklyTargetNum - weekHeldCount),
-      weeklyPct: weeklyTargetNum ? weekHeldCount / weeklyTargetNum : 0,
-      weeklyPace: pace(weekHeldCount, expectedWeek, weeklyTargetNum),
+      weekScheduled: weekScheduled,
+      weekHeld: weekHeldW,
+      weekCancelLate: weekCancelLateW,
+      weekPlanned: weekPlannedW,
+      weekLeft: Math.max(0, weeklyTargetNum - weekScheduled),
+      weeklyPct: weeklyTargetNum ? weekScheduled / weeklyTargetNum : 0,
+      weeklyPace: pace(weekScheduled, expectedWeek, weeklyTargetNum),
       expectedWeekByNow: Math.round(expectedWeek),
       daysLeft: dim - now.getDate()
     };
@@ -1945,17 +1953,17 @@ function sendWeeklyKpiEmail() {
     '<div style="background:#fbf7f1;border:1px solid #e7ddd0;border-radius:14px;padding:18px 20px">' +
     '<div style="font-size:18px;font-weight:bold;color:#2b2520">ניהול העסק</div>' +
     '<div style="font-size:13px;color:#8a7e6f;margin:2px 0 14px">' + Core.monthLabel(k.month) + ' · נותרו ' + k.daysLeft + ' ימים בחודש</div>' +
-    '<div style="font-size:14px;color:#5c5346;margin-bottom:10px">פגישות שהתקיימו השבוע</div>' +
-    '<div style="font-size:30px;font-weight:bold;color:#2b2520">' + k.weekHeld + ' <span style="font-size:18px;color:#a79a86;font-weight:normal">/ ' + k.weeklyTarget + '</span>' +
+    '<div style="font-size:14px;color:#5c5346;margin-bottom:10px">פגישות שנקבעו השבוע</div>' +
+    '<div style="font-size:30px;font-weight:bold;color:#2b2520">' + k.weekScheduled + ' <span style="font-size:18px;color:#a79a86;font-weight:normal">/ ' + k.weeklyTarget + '</span>' +
     '<span style="float:left;font-size:15px;color:#a79a86;font-weight:normal">' + pct + '%</span></div>' +
     '<div style="clear:both;margin:10px 0 12px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + pace.color + ';margin-left:6px"></span>' +
     '<span style="font-size:13px;color:' + pace.color + ';font-weight:bold">' + pace.label + '</span></div>' +
-    '<div style="font-size:13px;color:#5c5346">נותרו לעד: ' + k.weekLeft + ' &nbsp;·&nbsp; מתוכננות: ' + k.weekPlanned + '</div>' +
-    '<div style="font-size:13px;color:#a79a86;margin-top:4px">צפוי עד היום: ' + k.expectedWeekByNow + '</div>' +
+    '<div style="font-size:13px;color:#5c5346">התקיימו: ' + k.weekHeld + ' &nbsp;·&nbsp; בוטלו בחיוב: ' + k.weekCancelLate + ' &nbsp;·&nbsp; עתידיות: ' + k.weekPlanned + '</div>' +
+    '<div style="font-size:13px;color:#a79a86;margin-top:4px">נותרו ליעד: ' + k.weekLeft + '</div>' +
     '</div></div>';
   var st = Core.settingsOf(d);
-  MailApp.sendEmail({ to: Session.getEffectiveUser().getEmail(), subject: "ניהול העסק - " + k.weekHeld + "/" + k.weeklyTarget + " פגישות השבוע",
-    htmlBody: html, body: "פגישות השבוע: " + k.weekHeld + " מתוך " + k.weeklyTarget + ".\n" + (st.siteUrl ? st.siteUrl + "/app/" : "") });
+  MailApp.sendEmail({ to: Session.getEffectiveUser().getEmail(), subject: "ניהול העסק - " + k.weekScheduled + "/" + k.weeklyTarget + " פגישות השבוע",
+    htmlBody: html, body: "פגישות שנקבעו השבוע: " + k.weekScheduled + " מתוך " + k.weeklyTarget + " (התקיימו " + k.weekHeld + ", בוטלו בחיוב " + k.weekCancelLate + ", עתידיות " + k.weekPlanned + ").\n" + (st.siteUrl ? st.siteUrl + "/app/" : "") });
 }
 
 // ======================================================================= legacy import

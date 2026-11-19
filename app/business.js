@@ -44,12 +44,12 @@
 
     <div class="kpi-hero">
       <div class="kpi ${k.weeklyPace}">
-        <div class="kpi-top"><div><div class="kpi-lbl">פגישות שהתקיימו השבוע</div>
-          <div class="kpi-big">${k.weekHeld}<small> / ${k.weeklyTarget}</small></div></div>${UI.ring(k.weeklyPct)}</div>
+        <div class="kpi-top"><div><div class="kpi-lbl">פגישות שנקבעו השבוע</div>
+          <div class="kpi-big">${k.weekScheduled}<small> / ${k.weeklyTarget}</small></div></div>${UI.ring(k.weeklyPct)}</div>
         ${UI.bar(k.weeklyPct, k.weeklyPace === "behind" ? "bad" : k.weeklyPace === "warn" ? "warn" : "good")}
         <div class="kpi-meta"><span class="pace ${k.weeklyPace}"><i></i>${paceTxt[k.weeklyPace]}</span>
-          <span>נותרו ליעד: <b>${k.weekLeft}</b></span><span>מתוכננות: <b>${k.weekPlanned}</b></span>
-          <span>צפוי עד היום: <b>${k.expectedWeekByNow}</b></span></div>
+          <span>התקיימו: <b>${k.weekHeld}</b></span><span>בוטלו בחיוב: <b>${k.weekCancelLate}</b></span>
+          <span>עתידיות: <b>${k.weekPlanned}</b></span><span>נותרו ליעד: <b>${k.weekLeft}</b></span></div>
       </div>
       <div class="kpi ${k.sessionsPace}">
         <div class="kpi-top"><div><div class="kpi-lbl">פגישות שהתקיימו החודש</div>
