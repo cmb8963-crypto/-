@@ -912,40 +912,71 @@ var EmailTemplates = (function () {
     return { subject: "נקבע את הפגישה הבאה?", html: layout(x.st, "עדיין לא קבענו את הפגישה הבאה", "נקבע את הפגישה הבאה?", body) };
   };
 
-  // 4. Account / payments status
+  // 4. Account / payments status - written so the client understands it at a glance:
+  //    the bottom line first, then what was bought, what was paid, and where the package stands.
   T.account = function (x) {
     var a = x.account, c = x.client;
-    var pkg = a.currentPackage;
-    var unit = pkg && pkg.unitType === "hour" ? "שעות" : "פגישות";
-    var rows = [
-      ["שם התהליך", esc(c.processName || (pkg ? pkg.name : "תהליך ליווי"))],
-      ["פגישות שהתקיימו", String(a.heldCount)]
-    ];
-    if (pkg) {
-      rows.push(["הסל שלך", esc(pkg.name || Core.packageName(pkg.units, pkg.unitType))]);
-      rows.push(["מחיר הסל", money(pkg.price) + (pkg.discount > 0 ? " (אחרי הנחה " + money(pkg.discount) + ")" : "")]);
-      rows.push(["שולם עבור הסל", money(pkg.paid) + (pkg.unpaid > 0 ? " - נותר לתשלום " + money(pkg.unpaid) : " ✓"), pkg.unpaid > 0 ? C.warn : C.good]);
-      rows.push(["נוצלו מהסל", Core.round2(pkg.used) + " מתוך " + Core.round2(pkg.units) + " " + unit + " (" + money(pkg.valueUsed) + ")"]);
-      rows.push(["נשאר זיכוי בסל", Core.round2(pkg.remaining) + " " + unit + " (" + money(pkg.credit) + ")", C.good]);
-    }
-    rows.push(["הפגישה הבאה", a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה"]);
-    var dates = a.sessions.filter(function (s) { return Core.CONSUMING[s.status]; }).map(function (s) { return Core.fmtDate(s.date); }).filter(Boolean);
     var bal = a.balance;
+    function unitWord(t) { return t === "hour" ? "שעות" : "פגישות"; }
+    function n(v) { return String(Core.round2(v)); }
+    function table(head, rows, foot) {
+      var td = 'padding:9px 10px;border-bottom:1px solid ' + C.border + ';';
+      return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;font-family:' + FONT + ';font-size:14px;color:' + C.ink + ';">' +
+        '<tr>' + head.map(function (hd, i) { return '<td style="' + td + 'color:' + C.muted + ';font-size:12.5px;' + (i ? 'text-align:left;' : '') + '">' + hd + '</td>'; }).join("") + '</tr>' +
+        rows.map(function (r) { return '<tr>' + r.map(function (v, i) { return '<td style="' + td + (i ? 'text-align:left;white-space:nowrap;' : '') + '">' + v + '</td>'; }).join("") + '</tr>'; }).join("") +
+        (foot ? '<tr>' + foot.map(function (v, i) { return '<td style="padding:10px;font-weight:700;' + (i ? 'text-align:left;white-space:nowrap;' : '') + '">' + v + '</td>'; }).join("") + '</tr>' : "") +
+        '</table>';
+    }
+
+    // 1. the bottom line
+    var summary = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:6px 0 4px;"><tr>' +
+      [["סה\"כ לתשלום", money(a.totalCharges), C.ink], ["שולם", money(a.totalPaid), C.good],
+        [bal < 0 ? "יתרת זכות" : "נשאר לתשלום", money(Math.abs(bal)), bal > 0.5 ? C.warn : C.good]].map(function (k) {
+        return '<td align="center" style="padding:12px 6px;background:' + C.cream + ';border:1px solid ' + C.border + ';border-radius:12px;font-family:' + FONT + ';">' +
+          '<div style="font-size:12.5px;color:' + C.muted + ';">' + k[0] + '</div><div style="font-size:21px;font-weight:700;color:' + k[2] + ';margin-top:2px;">' + k[1] + '</div></td>';
+      }).join('<td width="8" style="font-size:0;">&nbsp;</td>') + '</tr></table>';
+
+    // 2. what was bought / charged
+    var bought = a.packages.map(function (p) {
+      var what = esc(p.name || Core.packageName(p.units, p.unitType));
+      var detail = p.endDate ? "כל הפגישות מ-" + Core.fmtDate(p.startDate) + " עד " + Core.fmtDate(p.endDate) + " (" + n(p.used) + " " + unitWord(p.unitType) + ")"
+        : "נרכש ב-" + Core.fmtDate(p.startDate) + " · " + n(p.units) + " " + unitWord(p.unitType);
+      return [what + '<div style="font-size:12.5px;color:' + C.muted + ';">' + esc(detail) + (p.discount > 0 ? " · כולל הנחה " + money(p.discount) : "") + '</div>', money(p.price)];
+    });
+    var extra = a.chargeLines.filter(function (l) { return l.kind === "session"; });
+    if (extra.length) bought.push(["פגישות מחוץ לסל" + '<div style="font-size:12.5px;color:' + C.muted + ';">' + extra.length + " פגישות: " +
+      esc(extra.map(function (l) { return Core.fmtDate(l.date); }).join(" · ")) + '</div>', money(extra.reduce(function (s, l) { return s + l.amount; }, 0))]);
+    a.chargeLines.filter(function (l) { return l.kind === "monthly" || l.kind === "oneoff"; }).forEach(function (l) {
+      bought.push([esc(l.label) + (l.date ? '<div style="font-size:12.5px;color:' + C.muted + ';">' + Core.fmtDate(l.date) + '</div>' : ""), money(l.amount)]);
+    });
+
+    // 3. payments
+    var pays = a.payments.map(function (p) {
+      return [Core.fmtDate(p.date) + (Core.PAY_METHODS[p.method] ? ' <span style="color:' + C.muted + ';font-size:12.5px;">· ' + esc(Core.PAY_METHODS[p.method]) + '</span>' : ""), money(p.amount)];
+    });
+
+    // 4. where the current package stands
+    var pkg = a.currentPackage, pkgBox = "";
+    if (pkg && !pkg.endDate) {
+      var u = unitWord(pkg.unitType);
+      pkgBox = heading("הסל הנוכחי: " + (pkg.name || Core.packageName(pkg.units, pkg.unitType))) +
+        para("נוצלו <strong>" + n(pkg.used) + "</strong> מתוך " + n(pkg.units) + " " + u + " · נשארו לך <strong style=\"color:" + C.good + ";\">" + n(pkg.remaining) + " " + u + "</strong>") +
+        progress(pkg.used, pkg.units);
+    }
+
     var body = para("שלום " + esc(firstName(c)) + ",") +
-      para("להלן סיכום מסודר של מצב התהליך והתשלומים נכון להיום:") +
-      heading("מצב התהליך") + kvTable(rows) +
-      (pkg ? progress(pkg.used, pkg.units) : "") +
-      (dates.length ? '<div style="margin:10px 0 4px;font-family:' + FONT + ';font-size:13px;color:' + C.muted + ';line-height:1.8;">תאריכי הפגישות: ' + esc(dates.slice(-15).join(" · ")) + '</div>' : "") +
-      heading("תשלומים") +
-      kvTable([
-        ["סה\"כ", money(a.totalCharges)],
-        ["שולם", money(a.totalPaid), C.good],
-        [bal < 0 ? "יתרת זכות" : "נשאר לתשלום", money(Math.abs(bal)), bal > 0 ? C.warn : C.good]
-      ]) +
-      box('<div style="font-size:14.5px;font-weight:700;color:' + (bal > 0 ? C.warn : C.good) + ';">' +
-        (bal > 0 ? "נשמח להסדרת היתרה בהזדמנות. לכל שאלה - אני כאן." : "הכל מסודר. תודה!") + '</div>') +
+      para("להלן סיכום מצב החשבון שלך נכון להיום:") +
+      summary +
+      (bought.length ? heading("מה כולל החשבון") + table(["פירוט", "סכום"], bought, ["סה\"כ", money(a.totalCharges)]) : "") +
+      heading("תשלומים שהתקבלו") +
+      (pays.length ? table(["תאריך", "סכום"], pays, ["סה\"כ שולם", money(a.totalPaid)]) : para("עדיין לא התקבלו תשלומים.")) +
+      pkgBox +
+      para('<span style="font-size:14px;">פגישות שהתקיימו עד היום: <strong>' + a.heldCount + '</strong> · הפגישה הבאה: <strong>' +
+        (a.nextSession ? esc(when(a.nextSession.date)) : "עדיין לא נקבעה") + '</strong></span>') +
+      box('<div style="font-size:14.5px;font-weight:700;color:' + (bal > 0.5 ? C.warn : C.good) + ';">' +
+        (bal > 0.5 ? "נשאר לתשלום " + money(bal) + ". נשמח להסדרה בהזדמנות - לכל שאלה אני כאן." : bal < -0.5 ? "יש לזכותך " + money(-bal) + ". תודה!" : "הכל מסודר. תודה!") + '</div>') +
       button("לאזור האישי", x.portalUrl);
-    return { subject: "סיכום מצב התהליך והתשלומים", html: layout(x.st, "מצב התהליך והתשלומים שלך", "מצב התהליך והתשלומים", body) };
+    return { subject: "סיכום מצב החשבון", html: layout(x.st, bal > 0.5 ? "נשאר לתשלום " + money(bal) : "מצב החשבון שלך", "מצב החשבון", body) };
   };
 
   // 5. Session summary
