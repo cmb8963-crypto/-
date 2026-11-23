@@ -120,7 +120,7 @@ var Core = (function () {
 
   var DEFAULT_SETTINGS = {
     coachName: "חיים מאיר ברויער",
-    businessName: "חיים ברויער - ייעוץ וליווי",
+    businessName: "חיים מאיר ברויער - ייעוץ וליווי",
     siteUrl: "https://chaimbreuer.co.il",
     weeklySessionTarget: 15,
     monthlySessionTarget: "",      // empty => weekly * 4.33
