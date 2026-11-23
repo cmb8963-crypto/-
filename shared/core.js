@@ -264,6 +264,7 @@ var Core = (function () {
       });
 
     var overflowUnits = 0, pi = 0, overflowSessions = [], pricedSessions = [];
+    var restOf = {};   // session id -> part (0..1) of a session left after the packages ran out
     consumed.forEach(function (s) {
       // A session with its own fixed price (e.g. history kept when two cards are merged)
       // is billed exactly that amount and does not use package units - unless a package
@@ -274,22 +275,30 @@ var Core = (function () {
         var covered = !bool(s.priceManual) && day && packages.some(function (p) { return p.remaining > 0.0001 && p.startDate && String(p.startDate).slice(0, 10) <= day; });
         if (!covered) { pricedSessions.push(s); return; }
       }
-      var assigned = false;
-      while (pi < packages.length) {
+      // Fill packages in order. A session bigger than what is left in a package (e.g. 1.5
+      // hours with 1 hour left) takes the rest of it, and the remainder continues to the
+      // next package - or, when there is none, is billed for exactly that part.
+      var part = 1;   // share of this session still to be covered
+      while (pi < packages.length && part > 0.0001) {
         var p = packages[pi];
         if (String(p.startDate || "") > String(s.date || "").slice(0, 10)) break; // package starts later than this session - leave it unassigned (overflow) rather than skip past a package that will still apply to later sessions
-        var need = p.unitType === "hour" ? num(s.durationMin || 60) / 60 : 1;
-        if (s.units !== undefined && s.units !== "" && s.units !== null && p.unitType === (client.unitType || "session")) need = num(s.units);
-        if (p.remaining > 0.0001) {
+        var full = p.unitType === "hour" ? num(s.durationMin || 60) / 60 : 1;
+        if (s.units !== undefined && s.units !== "" && s.units !== null) full = num(s.units);   // units written on the meeting (e.g. 1.5) always count as written
+        var need = full * part;
+        if (p.remaining > 0.0001 && need > 0) {
           var take = Math.min(need, p.remaining);
           p.used = round2(p.used + take); p.remaining = round2(p.remaining - take);
           p.sessions.push(s.id);
-          assigned = true;
-          break;
-        }
+          part = take >= need - 0.0001 ? 0 : part * (1 - take / need);
+          if (part <= 0.0001) break;
+        } else if (need <= 0) { part = 0; break; }
         pi++;
       }
-      if (!assigned) { overflowUnits += sessionUnits(s, client); overflowSessions.push(s); }
+      if (part > 0.0001) {
+        if (part < 0.9999) restOf[s.id] = part;
+        if (s.price !== undefined && s.price !== null && s.price !== "") pricedSessions.push(s);
+        else { overflowUnits += sessionUnits(s, client) * part; overflowSessions.push(s); }
+      }
     });
 
     var model = client.pricingModel || "single";
@@ -307,15 +316,17 @@ var Core = (function () {
       });
     } else {
       overflowSessions.forEach(function (s) {
-        var u = sessionUnits(s, client);
+        var u = round2(sessionUnits(s, client) * (restOf[s.id] || 1));
         chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") +
-          (u !== 1 ? " (" + round2(u) + " " + (client.unitType === "hour" ? "שעות" : "יח'") + ")" : "") + discountNote,
+          (u !== 1 ? " (" + round2(u) + " " + (client.unitType === "hour" ? "שעות" : "יח'") + ")" : "") +
+          (restOf[s.id] ? " - היתרה שמעבר לסל" : "") + discountNote,
           amount: round2(u * rate), kind: "session", sessionId: s.id });
       });
     }
     pricedSessions.forEach(function (s) {
-      chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") + " (מחיר קבוע)",
-        amount: round2(num(s.price)), kind: "session", sessionId: s.id });
+      var share = restOf[s.id] || 1;
+      chargeLines.push({ date: s.date, label: (s.status === "cancel_late" ? "ביטול באיחור" : "פגישה") + " (מחיר קבוע" + (share < 1 ? " - היתרה שמעבר לסל" : "") + ")",
+        amount: round2(num(s.price) * share), kind: "session", sessionId: s.id });
     });
     (db.charges || []).forEach(function (c) {
       if (c.clientId === clientId) chargeLines.push({ date: c.date, label: c.reason || "תשלום חד-פעמי", amount: num(c.amount), kind: "oneoff", id: c.id });
