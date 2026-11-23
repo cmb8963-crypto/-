@@ -939,7 +939,9 @@ var EmailTemplates = (function () {
     // 2. what was bought / charged
     var bought = a.packages.map(function (p) {
       var what = esc(p.name || Core.packageName(p.units, p.unitType));
-      var detail = p.endDate ? "כל הפגישות מ-" + Core.fmtDate(p.startDate) + " עד " + Core.fmtDate(p.endDate) + " (" + n(p.used) + " " + unitWord(p.unitType) + ")"
+      var covered = a.sessions.filter(function (s) { return p.sessions.indexOf(s.id) !== -1; });
+      var hours = covered.reduce(function (t, s) { return t + Core.num(s.durationMin || 60) / 60; }, 0);
+      var detail = p.endDate ? "כל הפגישות מ-" + Core.fmtDate(p.startDate) + " עד " + Core.fmtDate(p.endDate) + " (" + covered.length + " פגישות, " + n(hours) + " שעות)"
         : "נרכש ב-" + Core.fmtDate(p.startDate) + " · " + n(p.units) + " " + unitWord(p.unitType);
       return [what + '<div style="font-size:12.5px;color:' + C.muted + ';">' + esc(detail) + (p.discount > 0 ? " · כולל הנחה " + money(p.discount) : "") + '</div>', money(p.price)];
     });
