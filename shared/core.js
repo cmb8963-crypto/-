@@ -260,8 +260,13 @@ var Core = (function () {
       .map(function (p) {
         return { id: p.id, name: p.name, unitType: p.unitType || "session", units: num(p.units),
           price: Math.max(0, num(p.price) - num(p.discount)), listPrice: num(p.price), discount: num(p.discount),
-          startDate: p.startDate, notes: p.notes, used: 0, remaining: num(p.units), sessions: [] };
+          startDate: p.startDate, notes: p.notes, used: 0, remaining: num(p.units), sessions: [],
+          // A package for a period: a fixed price that covers every meeting from startDate to
+          // endDate, however many there were (its units are simply what was used).
+          endDate: /^\d{4}-\d{2}-\d{2}/.test(p.endDate || "") ? String(p.endDate).slice(0, 10) : "" };
       });
+    packages.forEach(function (p) { if (p.endDate) p.remaining = 1e9; });
+    function inPeriod(p, day) { return !p.endDate || day <= p.endDate; }
 
     var overflowUnits = 0, pi = 0, overflowSessions = [], pricedSessions = [];
     var restOf = {};   // session id -> part (0..1) of a session left after the packages ran out
@@ -272,7 +277,7 @@ var Core = (function () {
       // A price typed by hand in the meeting form (priceManual) always wins.
       if (s.price !== undefined && s.price !== null && s.price !== "") {
         var day = String(s.date || "").slice(0, 10);
-        var covered = !bool(s.priceManual) && day && packages.some(function (p) { return p.remaining > 0.0001 && p.startDate && String(p.startDate).slice(0, 10) <= day; });
+        var covered = !bool(s.priceManual) && day && packages.some(function (p) { return p.remaining > 0.0001 && p.startDate && String(p.startDate).slice(0, 10) <= day && inPeriod(p, day); });
         if (!covered) { pricedSessions.push(s); return; }
       }
       // Fill packages in order. A session bigger than what is left in a package (e.g. 1.5
@@ -284,6 +289,7 @@ var Core = (function () {
         // a package bought later does not cover an earlier meeting - except the remainder of a
         // meeting that already started in the previous package: that continues into the next one
         if (part >= 0.9999 && String(p.startDate || "") > String(s.date || "").slice(0, 10)) break; // package starts later than this session - leave it unassigned (overflow) rather than skip past a package that will still apply to later sessions
+        if (!inPeriod(p, String(s.date || "").slice(0, 10))) { pi++; continue; }   // its period is over (meetings are in date order)
         var full = p.unitType === "hour" ? num(s.durationMin || 60) / 60 : 1;
         if (s.units !== undefined && s.units !== "" && s.units !== null) full = num(s.units);   // units written on the meeting (e.g. 1.5) always count as written
         var need = full * part;
@@ -303,12 +309,15 @@ var Core = (function () {
       }
     });
 
+    // a period package is complete: its units are what it covered, nothing remains
+    packages.forEach(function (p) { if (p.endDate) { p.units = round2(p.used); p.remaining = 0; } });
+
     var model = client.pricingModel || "single";
     var rate = effectiveRate(client);
     var discountNote = num(client.discount) > 0 ? " - כולל הנחה " + fmtMoney(client.discount) : "";
     var chargeLines = [];
     packages.forEach(function (p) {
-      chargeLines.push({ date: p.startDate, label: (p.name || "סל") + (p.discount > 0 ? " (" + fmtMoney(p.listPrice) + " פחות הנחה " + fmtMoney(p.discount) + ")" : ""),
+      chargeLines.push({ date: p.startDate, label: (p.name || "סל") + (p.endDate ? " - כל הפגישות עד " + fmtDate(p.endDate) : "") + (p.discount > 0 ? " (" + fmtMoney(p.listPrice) + " פחות הנחה " + fmtMoney(p.discount) + ")" : ""),
         amount: p.price, kind: "package", packageId: p.id });
     });
     if (model === "monthly") {

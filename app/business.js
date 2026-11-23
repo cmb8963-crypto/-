@@ -726,10 +726,12 @@
     var m = UI.modal({
       title: p.id ? "עריכת סל" : "מכירת סל - " + c.name,
       body: h`${p.id ? "" : h`<div class="small muted" style="margin-bottom:6px">בחירה מהמחירון:</div><div class="chips" style="margin-bottom:14px">${presets.map(function (x, i) {
-          return h`<button type="button" class="chip" data-preset="${i}">${x.name || C.packageName(x.units, x.unitType)} · ${C.fmtMoney(x.price)}</button>`; })}<button type="button" class="chip" data-preset="custom">סל מותאם</button></div>`}
+          return h`<button type="button" class="chip" data-preset="${i}">${x.name || C.packageName(x.units, x.unitType)} · ${C.fmtMoney(x.price)}</button>`; })}<button type="button" class="chip" data-preset="custom">סל מותאם</button><button type="button" class="chip" data-preset="period">סל לתקופה (סכום קבוע עד תאריך)</button></div>`}
         <div class="form-grid" id="pkgBox">
           <label class="field span-2"><span>שם הסל</span><input type="text" name="name" value="${p.name}"></label>
-          <label class="field"><span>כמות</span><input type="number" name="units" value="${p.units}" min="0" step="0.5"></label>
+          <label class="field span-2 period-only"><span>מכסה את כל הפגישות עד תאריך (כולל)</span><input type="date" name="endDate" value="${p.endDate || ""}">
+            <span class="small muted">כל הפגישות מתאריך הרכישה ועד התאריך הזה נכללות במחיר הסל, לא משנה כמה היו</span></label>
+          <label class="field units-only"><span>כמות</span><input type="number" name="units" value="${p.units}" min="0" step="0.5"></label>
           <label class="field"><span>יחידה</span><select name="unitType">${UI.options([["hour", "שעות"], ["session", "פגישות"]], p.unitType)}</select></label>
           <label class="field"><span>מחיר הסל ₪</span><input type="number" name="price" value="${p.price}" min="0"></label>
           <label class="field"><span>הנחה ₪ (סכום שיורד מהמחיר)</span><input type="number" name="discount" value="${p.discount}" min="0" placeholder="0"></label>
@@ -739,9 +741,15 @@
         </div>`,
       foot: h`<button class="btn btn-primary" data-save>שמירה</button><button class="btn btn-outline" data-close>ביטול</button>`
     });
+    var isPeriod = !!p.endDate;
+    function periodView() {
+      UI.$$(".period-only", m.el).forEach(function (el) { el.style.display = isPeriod ? "" : "none"; });
+      UI.$$(".units-only", m.el).forEach(function (el) { el.style.display = isPeriod ? "none" : ""; });
+    }
+    periodView();
     function final() {
       var price = C.num(m.$("[name=price]").value), dsc = C.num(m.$("[name=discount]").value);
-      var units = C.num(m.$("[name=units]").value), unit = m.$("[name=unitType]").value;
+      var units = isPeriod ? 0 : C.num(m.$("[name=units]").value), unit = m.$("[name=unitType]").value;
       var pay = Math.max(0, price - dsc);
       UI.setHtml(m.$("#pkgFinal"), price ? h`<span>הלקוח צריך לשלם: <b style="font-size:17px">${C.fmtMoney(pay)}</b></span>
         ${dsc > 0 ? h`<span class="when">(${C.fmtMoney(price)} פחות הנחה ${C.fmtMoney(dsc)})</span>` : ""}
@@ -750,6 +758,9 @@
     UI.$$("[data-preset]", m.el).forEach(function (b) {
       b.addEventListener("click", function () {
         UI.$$("[data-preset]", m.el).forEach(function (x) { x.classList.toggle("active", x === b); });
+        isPeriod = b.dataset.preset === "period";
+        periodView();
+        if (isPeriod) { m.$("[name=name]").value = "סל לתקופה"; m.$("[name=endDate]").focus(); final(); return; }
         if (b.dataset.preset === "custom") { m.$("[name=name]").value = "סל מותאם"; m.$("[name=units]").focus(); final(); return; }
         var x = presets[+b.dataset.preset];
         m.$("[name=name]").value = x.name || C.packageName(x.units, x.unitType); m.$("[name=units]").value = x.units;
@@ -761,9 +772,17 @@
     final();
     m.$("[data-save]").addEventListener("click", async function () {
       var d = UI.formData(m.$("#pkgBox"));
-      if (!(C.num(d.units) > 0)) { UI.toast("יש להזין כמות", true); return; }
+      if (isPeriod) {
+        if (!d.endDate) { UI.toast("יש לבחור עד איזה תאריך הסל מכסה", true); return; }
+        if (d.startDate && d.endDate < d.startDate) { UI.toast("תאריך הסיום לפני תאריך הרכישה", true); return; }
+        if (!(C.num(d.price) > 0)) { UI.toast("יש להזין את מחיר הסל", true); return; }
+        d.units = "";
+      } else {
+        d.endDate = "";
+        if (!(C.num(d.units) > 0)) { UI.toast("יש להזין כמות", true); return; }
+      }
       if (C.num(d.discount) > C.num(d.price)) { UI.toast("ההנחה גדולה ממחיר הסל", true); return; }
-      if (!d.name) d.name = C.packageName(d.units, d.unitType);
+      if (!d.name) d.name = isPeriod ? "סל לתקופה" : C.packageName(d.units, d.unitType);
       d.id = p.id; d.clientId = clientId;
       m.close();
       await App.save("packages", [d]);
