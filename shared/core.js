@@ -281,7 +281,9 @@ var Core = (function () {
       var part = 1;   // share of this session still to be covered
       while (pi < packages.length && part > 0.0001) {
         var p = packages[pi];
-        if (String(p.startDate || "") > String(s.date || "").slice(0, 10)) break; // package starts later than this session - leave it unassigned (overflow) rather than skip past a package that will still apply to later sessions
+        // a package bought later does not cover an earlier meeting - except the remainder of a
+        // meeting that already started in the previous package: that continues into the next one
+        if (part >= 0.9999 && String(p.startDate || "") > String(s.date || "").slice(0, 10)) break; // package starts later than this session - leave it unassigned (overflow) rather than skip past a package that will still apply to later sessions
         var full = p.unitType === "hour" ? num(s.durationMin || 60) / 60 : 1;
         if (s.units !== undefined && s.units !== "" && s.units !== null) full = num(s.units);   // units written on the meeting (e.g. 1.5) always count as written
         var need = full * part;
