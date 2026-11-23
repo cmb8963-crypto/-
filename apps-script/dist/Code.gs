@@ -272,9 +272,10 @@ var Core = (function () {
       // A session with its own fixed price (e.g. history kept when two cards are merged)
       // is billed exactly that amount and does not use package units - unless a package
       // bought on or before that day still has room: then the package covers it.
+      // A price typed by hand in the meeting form (priceManual) always wins.
       if (s.price !== undefined && s.price !== null && s.price !== "") {
         var day = String(s.date || "").slice(0, 10);
-        var covered = day && packages.some(function (p) { return p.remaining > 0.0001 && p.startDate && String(p.startDate).slice(0, 10) <= day; });
+        var covered = !bool(s.priceManual) && day && packages.some(function (p) { return p.remaining > 0.0001 && p.startDate && String(p.startDate).slice(0, 10) <= day; });
         if (!covered) { pricedSessions.push(s); return; }
       }
       var assigned = false;

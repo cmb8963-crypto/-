@@ -879,6 +879,8 @@
       d.id = s.id;
       if (isNew) d.source = "manual";
       else if (d.clientId !== s.clientId) d.clientLocked = "true";   // chosen by hand: the calendar sync keeps it
+      // a price typed (or changed) here overrides packages; an untouched price from a merge does not
+      d.priceManual = d.price !== "" && d.price != null && (String(d.price) !== String(s.price == null ? "" : s.price) || C.bool(s.priceManual)) ? "true" : "";
       var createEvents = d.addToCalendar === "true";
       if (!createEvents) delete d.addToCalendar;
       m.close();
