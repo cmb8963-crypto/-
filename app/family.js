@@ -159,7 +159,7 @@
             <td><div>${t.description}</div><div class="small muted">${[t.account, t.branch, t.note].filter(Boolean).join(" · ")}${C.bool(t.excluded) ? " · לא נספר" : ""}${!biz && bizGroupCats()[t.category] ? h` · <b style="color:var(--gold-deep)">💼 נספר רק בעסק</b>` : ""}</div></td>
             <td class="n ${t.type === "income" ? "t-good" : ""}">${t.type === "income" ? "+" : ""}${C.fmtMoney(t.amount)}</td>
             <td>${biz ? (t.type === "income" ? h`<span class="badge gold" title="כבר נספר בהכנסות העסק - לא נספר שוב כאן">💼 הכנסה מהעסק${t.matchNote ? " · " + t.matchNote : ""}</span>` : h`<span class="badge gold" title="נספר בהוצאות העסק, לא בתקציב המשפחה">💼 עסק · ${t.businessCategory || "שונות"}</span>`) : h`<select data-change="fSetCat" data-id="${t.id}" style="min-height:32px;padding:4px 6px;font-size:12.5px">${catOptions(t.category || "לא מסווג", t.type)}</select>`}</td>
-            <td class="nowrap">${!C.bool(t.excluded) ? h`<button class="btn btn-ghost btn-xs" data-act="txBiz" data-id="${t.id}" title="${biz ? "להחזיר לתקציב המשפחה" : t.type === "income" ? "תשלום מלקוח שכבר רשום בעסק - לא לספור פעמיים" : "הוצאה של העסק - להעביר לעסק"}" aria-label="${biz ? "להחזיר למשפחה" : "להעביר לעסק"}">${biz ? "↩" : "💼"}</button>` : ""}<button class="btn btn-ghost btn-xs" data-act="editTx" data-id="${t.id}" aria-label="עריכה">✎</button></td></tr>`;
+            <td class="nowrap">${!C.bool(t.excluded) ? h`<button class="btn btn-ghost btn-xs" data-act="txBiz" data-id="${t.id}" title="${biz ? "להחזיר לתקציב המשפחה" : t.type === "income" ? "תשלום מלקוח שכבר רשום בעסק - לא לספור פעמיים" : "הוצאה של העסק - להעביר לעסק"}" aria-label="${biz ? "להחזיר למשפחה" : "להעביר לעסק"}">${biz ? "↩" : "💼"}</button>` : ""}<button class="btn btn-ghost btn-xs" data-act="txSkip" data-id="${t.id}" title="${C.bool(t.excluded) ? "לספור שוב בתקציב" : "לא הכנסה ולא הוצאה (החזר מחבר, העברה בין חשבונות) - לא לספור"}" aria-label="לא לספור">${C.bool(t.excluded) ? "↺" : "⊘"}</button><button class="btn btn-ghost btn-xs" data-act="editTx" data-id="${t.id}" aria-label="עריכה">✎</button></td></tr>`;
         }) : h`<tr><td colspan="5" class="empty">אין תנועות</td></tr>`}</tbody></table></div></div>
     </div>`;
   };
@@ -248,6 +248,7 @@
         ${key ? h`<label class="check" style="margin-top:12px"><input type="checkbox" id="sortRemember" checked> לזכור: כל תנועה שמכילה <b>${key}</b> תסווג כך גם בעתיד${same ? " (וגם " + same + " נוספות עכשיו)" : ""}</label>` : ""}
         <div class="row" style="margin-top:14px;gap:8px">
           ${t.type === "expense" ? h`<button type="button" class="btn btn-outline btn-sm" id="sortBiz">💼 הוצאה של העסק</button>` : ""}
+          <button type="button" class="btn btn-outline btn-sm" id="sortNot" title="החזר מחבר, העברה בין חשבונות, הלוואה שחזרה">⊘ לא הכנסה ולא הוצאה</button>
           <button type="button" class="btn btn-ghost btn-sm" id="sortSkip">דלג ←</button></div>`);
       async function assign(name) {
         var remember = m.$("#sortRemember") && m.$("#sortRemember").checked;
@@ -271,6 +272,7 @@
       m.$("#sortAdd").addEventListener("click", addNew);
       m.$("#sortNew").addEventListener("keydown", function (e) { if (e.key === "Enter") addNew(); });
       m.$("#sortSkip").addEventListener("click", function () { skipped[t.id] = true; show(); });
+      m.$("#sortNot").addEventListener("click", async function () { await App.save("family_tx", [{ id: t.id, excluded: "true" }], { toast: false, silent: true }); show(); });
       var bz = m.$("#sortBiz");
       if (bz) bz.addEventListener("click", function () {
         bizModal(t.description, async function (cat, pat) {
@@ -282,6 +284,11 @@
       });
     }
     show();
+  };
+  Actions.txSkip = function (t) {
+    var tx = C.byId(App.db.family_tx, t.dataset.id);
+    var on = !C.bool(tx.excluded);
+    App.save("family_tx", [{ id: tx.id, excluded: on ? "true" : "" }], { msg: on ? "לא נספר בתקציב (לא הכנסה ולא הוצאה)" : "נספר שוב בתקציב" });
   };
   Actions.matchDeposits = async function () {
     var list = (App.db.family_tx || []).filter(function (x) { return C.monthKey(x.date) === ui.month && !C.bool(x.excluded); });
