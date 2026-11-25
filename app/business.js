@@ -1059,8 +1059,8 @@
     <div class="card section"><div class="card-title"><h3>הוצאות ${C.monthLabel(ui.pnlMonth)}</h3>${monthNav("pnlMonth", ui.pnlMonth, false)}</div>
       <div class="table-wrap"><table class="t"><thead><tr><th>קטגוריה</th><th class="n">סכום</th><th>סוג</th><th>הערות</th><th></th></tr></thead><tbody>
       ${cur.expenses.length ? cur.expenses.map(function (e) {
-        return h`<tr><td>${e.category}</td><td class="n">${C.fmtMoney(e.amount)}</td><td>${e.recurring ? h`<span class="badge info">קבועה</span>` : "חד-פעמית"}</td><td>${e.notes || ""}</td>
-          <td><button class="btn btn-ghost btn-xs" data-act="editExpense" data-id="${e.id}">✎</button></td></tr>`;
+        return h`<tr><td>${e.category}</td><td class="n">${C.fmtMoney(e.amount)}</td><td>${e.fromFamily ? h`<span class="badge gold">💼 מהאשראי / הבנק</span>` : e.recurring ? h`<span class="badge info">קבועה</span>` : "חד-פעמית"}</td><td>${e.notes || ""}</td>
+          <td>${e.fromFamily ? h`<a class="btn btn-ghost btn-xs" href="#family/month" title="מנוהל בכלכלת המשפחה (כפתור ↩ משפחה מחזיר)">←</a>` : h`<button class="btn btn-ghost btn-xs" data-act="editExpense" data-id="${e.id}">✎</button>`}</td></tr>`;
       }) : h`<tr><td colspan="5" class="empty">אין הוצאות בחודש זה</td></tr>`}</tbody>
       <tfoot><tr><td>סה"כ</td><td class="n">${C.fmtMoney(cur.expenseTotal)}</td><td colspan="3">גבייה ${C.fmtMoney(cur.collected)} · רווח נקי <b>${C.fmtMoney(cur.net)}</b></td></tr></tfoot></table></div></div>`;
   };

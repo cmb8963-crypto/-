@@ -457,6 +457,12 @@ var Core = (function () {
         out.push({ id: e.id, category: e.category, amount: num(e.amount), notes: e.notes, recurring: false, date: e.date });
       }
     });
+    // Business expenses paid from a family bank account / credit card ("💼 לעסק" in the family module)
+    (db.family_tx || []).forEach(function (t) {
+      if (!bool(t.business) || bool(t.excluded) || monthKey(t.date) !== mk || t.type === "income") return;
+      out.push({ id: t.id, category: t.businessCategory || "שונות", amount: num(t.amount), notes: t.description + (t.account ? " · " + t.account : ""),
+        recurring: false, date: t.date, fromFamily: true });
+    });
     return out;
   }
 
@@ -550,14 +556,58 @@ var Core = (function () {
   }
 
   // ---------------------------------------------------------------- family
-  function categorize(desc, rules) {
-    var d = String(desc || "").toLowerCase();
-    for (var i = 0; i < (rules || []).length; i++) {
-      var p = String(rules[i].pattern || "").toLowerCase();
-      if (p && d.indexOf(p) !== -1) return rules[i].category;
+  // The text must start a word: "מי " matches "מי כרמל" but not "דמי כרטיס" or "לאומי חד".
+  function wordMatch(d, p) {
+    var i = d.indexOf(p);
+    while (i !== -1) {
+      if (i === 0 || !/[א-תa-z0-9]/i.test(d.charAt(i - 1))) return true;
+      i = d.indexOf(p, i + 1);
     }
-    return "לא מסווג";
+    return false;
   }
+  // Built-in hints, used after the user's own rules (they never override them).
+  var BUILTIN_RULES = [
+    ["ביטוח לאומי", "קצבאות ביטוח לאומי"], ["בטוח לאומי", "קצבאות ביטוח לאומי"], ["קצבת ילדים", "קצבאות ביטוח לאומי"],
+    ["עמלת", "עמלות וריבית"], ["דמי כרטיס", "עמלות וריבית"], ["הלואה", "החזר הלוואות"], ["הלוואה", "החזר הלוואות"],
+    ["משכנתא", "שכר דירה / משכנתא"], ["גמל", "חסכונות והפרשות"]
+  ].map(function (r) { return { pattern: r[0], category: r[1], priority: "0" }; });   // same level as the starter rules: the more specific text wins
+  function bestRule(desc, rules) {
+    var d = String(desc || "").toLowerCase(), best = null;
+    (rules || []).concat(BUILTIN_RULES).forEach(function (r) {
+      var p = String(r.pattern || "").toLowerCase();
+      if (!p || !wordMatch(d, p)) return;
+      if (!best || num(r.priority) > num(best.priority) || (num(r.priority) === num(best.priority) && p.length > String(best.pattern).length)) best = r;
+    });
+    return best;
+  }
+  function categorize(desc, rules) {
+    var r = bestRule(desc, rules);
+    return r && !bool(r.business) ? r.category : "לא מסווג";
+  }
+  // Credit-card exports (e.g. Cal) carry a merchant branch ("ענף") - a good default category.
+  var BRANCH_CATEGORY = {
+    "מזון ומשקאות": "מכולת", "מזון מהיר": "אוכל בחוץ", "מסעדות": "אוכל בחוץ", "פנאי בילוי": "שונות",
+    "אופנה": "ביגוד והנעלה", "רפואה ובריאות": "בריאות", "עמותות ותרומות": "צדקה", "תקשורת ומחשבים": "תקשורת",
+    "רכב ותחבורה": "נסיעות", "תיירות": "נסיעות", "אנרגיה": "דלק לרכב", "ריהוט ובית": "רכישות קטנות",
+    "ציוד ומשרד": "רכישות קטנות", "תעשיה ומכירות": "רכישות קטנות", "ביטוח ופיננסים": "ביטוחים", "חינוך": "שכר לימוד",
+    "מוסדות": "הו\"ק שונות", "שונות": "שונות"
+  };
+  /*
+   * Classify one transaction: { category, business, businessCategory }.
+   * A matching rule wins (personal rules first, then the most specific text); a rule marked
+   * "business" sends the expense to the business. Otherwise the card's branch decides.
+   */
+  function classify(desc, rules, branch) {
+    var r = bestRule(desc, rules);
+    if (r && bool(r.business)) return { category: "לא מסווג", business: true, businessCategory: r.category };
+    if (r) return { category: r.category, business: false };
+    var b = BRANCH_CATEGORY[String(branch || "").trim()];
+    return { category: b || "לא מסווג", business: false };
+  }
+  // A credit-card bill in the bank statement: its details come from the card's own statement,
+  // so counting it too would count every purchase twice.
+  var CARD_BILL = /(דיינרס|כרטיסי אשראי|ישראכרט|לאומי קארד|מקס איט|אמריקן אקספרס|כאל\b|ויזה כ\.?א\.?ל|^max\b)/i;
+  function isCardBill(desc) { return CARD_BILL.test(String(desc || "")); }
 
   function familyCategoryMap(db) {
     var m = {};
@@ -567,7 +617,9 @@ var Core = (function () {
 
   function familyMonth(db, mk) {
     var cats = familyCategoryMap(db);
-    var tx = (db.family_tx || []).filter(function (t) { return monthKey(t.date) === mk && !bool(t.excluded); });
+    var monthTx = (db.family_tx || []).filter(function (t) { return monthKey(t.date) === mk && !bool(t.excluded); });
+    var bizTx = monthTx.filter(function (t) { return bool(t.business); });
+    var tx = monthTx.filter(function (t) { return !bool(t.business); });
     var bm = businessMonth(db, mk);
     var byCat = {};
     var income = 0, expense = 0;
@@ -603,7 +655,9 @@ var Core = (function () {
       totalExpense: round2(expense),
       balance: round2(totalIncome - expense),
       overBudget: rows.filter(function (r) { return r.over; }),
-      uncategorized: tx.filter(function (t) { return !t.category || t.category === "לא מסווג"; }).length
+      uncategorized: tx.filter(function (t) { return !t.category || t.category === "לא מסווג"; }).length,
+      businessPaid: round2(bizTx.reduce(function (s2, t) { return s2 + num(t.amount); }, 0)),   // business costs paid from family accounts
+      businessPaidCount: bizTx.length
     };
   }
 
@@ -754,7 +808,8 @@ var Core = (function () {
     fmtMoney: fmtMoney, monthLabel: monthLabel, byId: byId, bool: bool, settingsOf: settingsOf,
     monthlySessionTarget: monthlySessionTarget, sessionUnits: sessionUnits, sessionsOf: sessionsOf,
     clientAccount: clientAccount, allAccounts: allAccounts, monthlyMonths: monthlyMonths, expensesForMonth: expensesForMonth,
-    businessMonth: businessMonth, kpi: kpi, categorize: categorize, familyMonth: familyMonth,
+    businessMonth: businessMonth, kpi: kpi, categorize: categorize, classify: classify, isCardBill: isCardBill,
+    BRANCH_CATEGORY: BRANCH_CATEGORY, familyMonth: familyMonth,
     loansSummary: loansSummary, txFingerprint: txFingerprint, freeSlots: freeSlots, hmToMin: hmToMin,
     minToHm: minToHm, portalView: portalView, nameTokens: nameTokens, matchClient: matchClient, escapeHtml: escapeHtml
   };

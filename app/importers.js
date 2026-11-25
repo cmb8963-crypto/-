@@ -10,6 +10,8 @@ var Importers = (function () {
   var C = typeof Core !== "undefined" ? Core : require("../shared/core.js");
 
   function s(v) { return v === null || v === undefined ? "" : String(v).trim(); }
+  // header cells often contain line breaks ("תאריך\nעסקה") - compare them as one line
+  function hd(v) { return s(v).replace(/\s+/g, " "); }
 
   // ------------------------------------------------------------- values
   function parseAmount(v) {
@@ -51,7 +53,10 @@ var Importers = (function () {
   var HEAD = {
     date: /^(תאריך( ה?עסקה| רכישה| פעולה)?|date)$/i,
     date2: /תאריך/,
-    desc: /(שם בית ה?עסק|תיאור|פרטים|הפעולה|סוג פעולה|בית עסק|description|merchant)/i,
+    desc: /(שם בית ה?עסק|בית עסק|תיאור|תאור|פרטים|description|merchant)/i,
+    descWeak: /(הפעולה|סוג פעולה)/,   // only when nothing better exists (often a numeric code)
+    branch: /^(ענף|קטגוריה|category)$/i,
+    note: /^(הערות|פרטים נוספים|notes)$/i,
     charge: /(סכום חיוב|סכום לחיוב|חיוב בש"?ח|סכום בש"?ח)/,
     amount: /(^סכום$|סכום העסקה|סכום עסקה|amount|^סכום)/i,
     debit: /(חובה|debit)/i,
@@ -62,20 +67,35 @@ var Importers = (function () {
   // Find the header row and guess which column is what.
   function detect(rows) {
     for (var r = 0; r < Math.min(rows.length, 40); r++) {
-      var row = (rows[r] || []).map(s);
+      var row = (rows[r] || []).map(hd);
       var hasDate = row.some(function (c) { return HEAD.date2.test(c); });
       var hasAmt = row.some(function (c) { return HEAD.amount.test(c) || HEAD.debit.test(c) || HEAD.charge.test(c); });
       if (!hasDate || !hasAmt) continue;
-      var map = { headerRow: r, date: -1, desc: -1, amount: -1, debit: -1, credit: -1 };
+      var map = { headerRow: r, date: -1, desc: -1, amount: -1, debit: -1, credit: -1, branch: -1, note: -1 };
+      var weak = -1;
       row.forEach(function (c, i) {
         if (map.date === -1 && HEAD.date.test(c)) map.date = i;
         if (map.desc === -1 && HEAD.desc.test(c)) map.desc = i;
+        if (weak === -1 && HEAD.descWeak.test(c)) weak = i;
+        if (map.branch === -1 && HEAD.branch.test(c)) map.branch = i;
+        if (map.note === -1 && HEAD.note.test(c)) map.note = i;
         if (HEAD.charge.test(c)) map.amount = i;
         else if (map.amount === -1 && HEAD.amount.test(c) && !HEAD.balance.test(c)) map.amount = i;
         if (map.debit === -1 && HEAD.debit.test(c)) map.debit = i;
         if (map.credit === -1 && HEAD.credit.test(c) && !/כרטיס/.test(c)) map.credit = i;
       });
       if (map.date === -1) map.date = row.findIndex(function (c) { return HEAD.date2.test(c); });
+      // credit-card statements: "עסקאות לחיוב ב-15/09/2026" above the table = the month the money leaves
+      for (var b = 0; b < r; b++) {
+        var bm = (rows[b] || []).map(s).join(" ").match(/לחיוב\s*ב-?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+        if (bm) { map.billDate = parseDate(bm[1]); break; }
+      }
+      if (map.desc === -1 && weak !== -1) {
+        // use the weak column only if it holds real text, not codes
+        var txt = 0;
+        for (var w = r + 1; w < Math.min(rows.length, r + 15); w++) { var wv = s((rows[w] || [])[weak]); if (wv && isNaN(parseFloat(wv))) txt++; }
+        if (txt >= 3) map.desc = weak;
+      }
       if (map.desc === -1) {
         // widest text column in the next rows
         var best = -1, bestLen = 0;
@@ -120,7 +140,11 @@ var Importers = (function () {
       }
       if (!amount) continue;
       if (/^(סה"?כ|total)/i.test(desc)) continue;
-      out.push({ date: date, description: desc, amount: C.round2(amount), type: type });
+      var tx = { date: date, description: desc, amount: C.round2(amount), type: type };
+      if (map.billDate) { tx.purchaseDate = date; tx.date = map.billDate; }   // counted in the month it is charged
+      if (map.branch >= 0 && s(row[map.branch])) tx.branch = s(row[map.branch]);
+      if (map.note >= 0 && s(row[map.note])) tx.note = s(row[map.note]);
+      out.push(tx);
     }
     return out;
   }

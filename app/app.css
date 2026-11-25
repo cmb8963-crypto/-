@@ -121,3 +121,7 @@
 .sum-block { border: 1px solid var(--border); border-radius: 12px; padding: 14px; background: #FFFDF9; }
 .sum-block + .sum-block { margin-top: 10px; }
 .sum-block h4 { font-size: 14px; color: var(--gold-deep); margin: 8px 0 4px; }
+
+/* family month: categories | transactions (wider) */
+.fam-split { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+@media (max-width: 1000px) { .fam-split { grid-template-columns: 1fr; } }
