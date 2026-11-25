@@ -26,6 +26,7 @@
     })).concat([h`<option value="__new">➕ קטגוריה חדשה...</option>`]);
   }
   function bizCats() { return C.businessCats(App.settings()); }
+  function bizGroupCats() { var m = {}; (App.db.family_categories || []).forEach(function (c) { if (c.group === "business") m[c.name] = true; }); return m; }
   function catNames() { return (App.db.family_categories || []).map(function (c) { return c.name; }); }
   // "➕ קטגוריה חדשה..." picked in a dropdown: create it, then use it there.
   function newCatFromSelect(sel, type, use) {
@@ -61,13 +62,13 @@
     fms.forEach(function (f) { tot.inc += f.totalIncome; tot.exp += f.totalExpense; tot.biz += f.businessNet; });
     var active = fms.filter(function (f) { return f.tx.length || f.businessNet; }).length || 1;
     // group totals per month (annual view)
-    var groups = Object.keys(C.FAMILY_GROUPS).filter(function (g) { return g !== "income"; });
+    var groups = Object.keys(C.FAMILY_GROUPS).filter(function (g) { return g !== "income" && g !== "business"; });
     var gm = fms.map(function (f) {
       var o = {};
       f.categories.forEach(function (r) { if (r.group !== "income") o[r.group] = (o[r.group] || 0) + r.actual; });
       return o;
     });
-    var budgetTotal = cats().filter(function (c) { return c.group !== "income"; }).reduce(function (s, c) { return s + C.num(c.budget); }, 0);
+    var budgetTotal = cats().filter(function (c) { return c.group !== "income" && c.group !== "business"; }).reduce(function (s, c) { return s + C.num(c.budget); }, 0);
     return h`<div class="page-head"><div><h1>כלכלת המשפחה</h1><div class="sub">מבט-על חודשי ושנתי · הכנסות העסק מוזרמות אוטומטית</div></div>
       <div class="row"><select data-change="fYear" aria-label="שנה" style="width:auto">${UI.options(yearOpts, ui.year)}</select><a class="btn btn-primary btn-sm" href="#family/import">⇪ ייבוא דוחות</a></div></div>
 
@@ -155,7 +156,7 @@
         ${tx.length ? tx.map(function (t) {
             var biz = C.bool(t.business);
           return h`<tr style="${C.bool(t.excluded) ? "opacity:.45" : ""}"><td class="nowrap small">${C.fmtDate(t.date)}${t.purchaseDate && t.purchaseDate !== t.date ? h`<div class="muted">קנייה ${C.fmtDate(t.purchaseDate)}</div>` : ""}</td>
-            <td><div>${t.description}</div><div class="small muted">${[t.account, t.branch, t.note].filter(Boolean).join(" · ")}${C.bool(t.excluded) ? " · לא נספר" : ""}</div></td>
+            <td><div>${t.description}</div><div class="small muted">${[t.account, t.branch, t.note].filter(Boolean).join(" · ")}${C.bool(t.excluded) ? " · לא נספר" : ""}${!biz && bizGroupCats()[t.category] ? h` · <b style="color:var(--gold-deep)">💼 נספר רק בעסק</b>` : ""}</div></td>
             <td class="n ${t.type === "income" ? "t-good" : ""}">${t.type === "income" ? "+" : ""}${C.fmtMoney(t.amount)}</td>
             <td>${biz ? (t.type === "income" ? h`<span class="badge gold" title="כבר נספר בהכנסות העסק - לא נספר שוב כאן">💼 הכנסה מהעסק${t.matchNote ? " · " + t.matchNote : ""}</span>` : h`<span class="badge gold" title="נספר בהוצאות העסק, לא בתקציב המשפחה">💼 עסק · ${t.businessCategory || "שונות"}</span>`) : h`<select data-change="fSetCat" data-id="${t.id}" style="min-height:32px;padding:4px 6px;font-size:12.5px">${catOptions(t.category || "לא מסווג", t.type)}</select>`}</td>
             <td class="nowrap">${!C.bool(t.excluded) ? h`<button class="btn btn-ghost btn-xs" data-act="txBiz" data-id="${t.id}" title="${biz ? "להחזיר לתקציב המשפחה" : t.type === "income" ? "תשלום מלקוח שכבר רשום בעסק - לא לספור פעמיים" : "הוצאה של העסק - להעביר לעסק"}" aria-label="${biz ? "להחזיר למשפחה" : "להעביר לעסק"}">${biz ? "↩" : "💼"}</button>` : ""}<button class="btn btn-ghost btn-xs" data-act="editTx" data-id="${t.id}" aria-label="עריכה">✎</button></td></tr>`;
@@ -658,7 +659,7 @@
     f.categories.forEach(function (r) { actual[r.category] = r.actual; });
     var byGroup = {};
     list.forEach(function (c) { (byGroup[c.group] = byGroup[c.group] || []).push(c); });
-    var totBud = list.filter(function (c) { return c.group !== "income"; }).reduce(function (s, c) { return s + C.num(c.budget); }, 0);
+    var totBud = list.filter(function (c) { return c.group !== "income" && c.group !== "business"; }).reduce(function (s, c) { return s + C.num(c.budget); }, 0);
     var totInc = list.filter(function (c) { return c.group === "income"; }).reduce(function (s, c) { return s + C.num(c.budget); }, 0);
     return h`<div class="page-head"><div><h1>תקציב וקטגוריות</h1><div class="sub">תקציב חודשי לכל סעיף - חריגה תוצג כהתראה בדשבורד</div></div>
       <div class="row"><button class="btn btn-primary btn-sm" data-act="newCat">+ קטגוריה</button><button class="btn btn-outline btn-sm" data-act="editBizCats">💼 קטגוריות העסק</button><button class="btn btn-bad btn-sm" data-act="resetCats">🗑 התחלה מחדש</button></div></div>

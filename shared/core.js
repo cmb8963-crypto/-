@@ -69,7 +69,8 @@ var Core = (function () {
     maaser: "מעשרות וצדקה",
     annual: "הוצאות שנתיות / מעגל השנה",
     debt: "החזרי חובות וחסכונות",
-    unexpected: "לא צפויות"
+    unexpected: "לא צפויות",
+    business: "💼 הוצאות העסק (לא נספרות במשפחה)"
   };
 
   var DEFAULT_FAMILY_CATEGORIES = [
@@ -460,9 +461,10 @@ var Core = (function () {
       }
     });
     // Business expenses paid from a family bank account / credit card ("💼 לעסק" in the family module)
+    var bizNames = bizCategoryNames(db);
     (db.family_tx || []).forEach(function (t) {
-      if (!bool(t.business) || bool(t.excluded) || monthKey(t.date) !== mk || t.type === "income") return;
-      out.push({ id: t.id, category: t.businessCategory || "שונות", amount: num(t.amount), notes: t.description + (t.account ? " · " + t.account : ""),
+      if (!isBusinessTx(t, bizNames) || bool(t.excluded) || monthKey(t.date) !== mk || t.type === "income") return;
+      out.push({ id: t.id, category: bool(t.business) ? (t.businessCategory || "שונות") : t.category, amount: num(t.amount), notes: t.description + (t.account ? " · " + t.account : ""),
         recurring: false, date: t.date, fromFamily: true });
     });
     return out;
@@ -615,6 +617,12 @@ var Core = (function () {
   var CARD_BILL = /(דיינרס|כרטיסי אשראי|ישראכרט|לאומי קארד|מקס איט|אמריקן אקספרס|כאל\b|ויזה כ\.?א\.?ל|^max\b)/i;
   function isCardBill(desc) { return CARD_BILL.test(String(desc || "")); }
 
+  function bizCategoryNames(db) {
+    var m = {};
+    (db.family_categories || []).forEach(function (c) { if (c.group === "business") m[c.name] = true; });
+    return m;
+  }
+  function isBusinessTx(t, bizNames) { return bool(t.business) || !!(bizNames && bizNames[t.category]); }
   function familyCategoryMap(db) {
     var m = {};
     (db.family_categories || []).forEach(function (c) { m[c.name] = c; });
@@ -624,9 +632,10 @@ var Core = (function () {
   function familyMonth(db, mk) {
     var cats = familyCategoryMap(db);
     var monthTx = (db.family_tx || []).filter(function (t) { return monthKey(t.date) === mk && !bool(t.excluded); });
-    var bizTx = monthTx.filter(function (t) { return bool(t.business) && t.type !== "income"; });
+    var bizNames = bizCategoryNames(db);
+    var bizTx = monthTx.filter(function (t) { return isBusinessTx(t, bizNames) && t.type !== "income"; });
     var bizIn = monthTx.filter(function (t) { return bool(t.business) && t.type === "income"; });   // client payments deposited - already in the business income
-    var tx = monthTx.filter(function (t) { return !bool(t.business); });
+    var tx = monthTx.filter(function (t) { return !isBusinessTx(t, bizNames); });
     var bm = businessMonth(db, mk);
     var byCat = {};
     var income = 0, expense = 0;
