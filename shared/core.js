@@ -624,7 +624,8 @@ var Core = (function () {
   function familyMonth(db, mk) {
     var cats = familyCategoryMap(db);
     var monthTx = (db.family_tx || []).filter(function (t) { return monthKey(t.date) === mk && !bool(t.excluded); });
-    var bizTx = monthTx.filter(function (t) { return bool(t.business); });
+    var bizTx = monthTx.filter(function (t) { return bool(t.business) && t.type !== "income"; });
+    var bizIn = monthTx.filter(function (t) { return bool(t.business) && t.type === "income"; });   // client payments deposited - already in the business income
     var tx = monthTx.filter(function (t) { return !bool(t.business); });
     var bm = businessMonth(db, mk);
     var byCat = {};
@@ -663,8 +664,35 @@ var Core = (function () {
       overBudget: rows.filter(function (r) { return r.over; }),
       uncategorized: tx.filter(function (t) { return !t.category || t.category === "לא מסווג"; }).length,
       businessPaid: round2(bizTx.reduce(function (s2, t) { return s2 + num(t.amount); }, 0)),   // business costs paid from family accounts
-      businessPaidCount: bizTx.length
+      businessPaidCount: bizTx.length,
+      businessDeposits: round2(bizIn.reduce(function (s2, t) { return s2 + num(t.amount); }, 0)),
+      businessDepositsCount: bizIn.length
     };
+  }
+
+  /*
+   * Bank deposits that are client payments already recorded in the business: same amount,
+   * within `days` days. Each payment is matched once (also against deposits matched before).
+   * Returns { txIndex: payment }.
+   */
+  function matchClientPayments(db, txs, days) {
+    days = days || 7;
+    var used = {};
+    (db.family_tx || []).forEach(function (t) { if (t.paymentId) used[t.paymentId] = true; });
+    var out = {};
+    (txs || []).forEach(function (t, i) {
+      if (t.type !== "income" || bool(t.business) || t.paymentId) return;
+      var td = toDate(t.date); if (!td) return;
+      var best = null, bestGap = 1e9;
+      (db.payments || []).forEach(function (p) {
+        if (used[p.id] || Math.abs(num(p.amount) - num(t.amount)) > 0.009) return;
+        var pd = toDate(p.date); if (!pd) return;
+        var gap = Math.abs(td - pd) / 864e5;
+        if (gap <= days && gap < bestGap) { best = p; bestGap = gap; }
+      });
+      if (best) { used[best.id] = true; out[i] = best; }
+    });
+    return out;
   }
 
   function loansSummary(db) {
@@ -814,7 +842,7 @@ var Core = (function () {
     fmtMoney: fmtMoney, monthLabel: monthLabel, byId: byId, bool: bool, settingsOf: settingsOf,
     monthlySessionTarget: monthlySessionTarget, sessionUnits: sessionUnits, sessionsOf: sessionsOf,
     clientAccount: clientAccount, allAccounts: allAccounts, monthlyMonths: monthlyMonths, expensesForMonth: expensesForMonth,
-    businessMonth: businessMonth, kpi: kpi, categorize: categorize, classify: classify, isCardBill: isCardBill,
+    businessMonth: businessMonth, kpi: kpi, categorize: categorize, classify: classify, isCardBill: isCardBill, matchClientPayments: matchClientPayments,
     BRANCH_CATEGORY: BRANCH_CATEGORY, familyMonth: familyMonth,
     loansSummary: loansSummary, txFingerprint: txFingerprint, freeSlots: freeSlots, hmToMin: hmToMin,
     minToHm: minToHm, portalView: portalView, nameTokens: nameTokens, matchClient: matchClient, escapeHtml: escapeHtml

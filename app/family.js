@@ -121,6 +121,11 @@
       <div class="tile"><div class="lbl">הכנסות אחרות</div><div class="val">${C.fmtMoney(f.otherIncome)}</div></div>
       <div class="tile"><div class="lbl">הוצאות</div><div class="val">${C.fmtMoney(f.totalExpense)}</div></div>
       <div class="tile ${f.balance >= 0 ? "good" : "bad"}"><div class="lbl">יתרה</div><div class="val">${C.fmtMoney(f.balance)}</div></div></div>
+    ${(function () {
+      var cand = Object.keys(C.matchClientPayments(App.db, (App.db.family_tx || []).filter(function (x) { return C.monthKey(x.date) === ui.month && !C.bool(x.excluded); }))).length;
+      return cand ? h`<div class="aitem warn" style="margin-top:12px">🔗 <span>${cand} הפקדות בבנק נראות כמו תשלומים מלקוחות שכבר רשומים בעסק (אותו סכום, תאריך קרוב).</span><button class="btn btn-primary btn-xs" data-act="matchDeposits">סימון כ"הכנסה מהעסק"</button></div>` : "";
+    })()}
+    ${f.businessDepositsCount ? h`<div class="aitem" style="margin-top:12px">💼 <span>${f.businessDepositsCount} הפקדות מלקוחות (${C.fmtMoney(f.businessDeposits)}) כבר נספרות ב"הכנסה מהעסק (נטו)" - לא נספרות שוב.</span></div>` : ""}
     ${f.businessPaidCount ? h`<div class="aitem" style="margin-top:12px">💼 <span>${f.businessPaidCount} הוצאות עסק ששולמו מהחשבונות הפרטיים (${C.fmtMoney(f.businessPaid)}) עברו להוצאות העסק ולא נספרות כאן.</span><a class="btn btn-ghost btn-xs" href="#biz/pnl">לרווח והפסד ←</a></div>` : ""}
     <div class="grid section fam-split" style="align-items:start">
       <div class="card"><div class="card-title"><h3>לפי קטגוריות</h3>${ui.catFilter ? h`<button class="chip active" data-act="fCat" data-cat="">סינון: ${ui.catFilter} ✕</button>` : ""}</div>
@@ -152,8 +157,8 @@
           return h`<tr style="${C.bool(t.excluded) ? "opacity:.45" : ""}"><td class="nowrap small">${C.fmtDate(t.date)}${t.purchaseDate && t.purchaseDate !== t.date ? h`<div class="muted">קנייה ${C.fmtDate(t.purchaseDate)}</div>` : ""}</td>
             <td><div>${t.description}</div><div class="small muted">${[t.account, t.branch, t.note].filter(Boolean).join(" · ")}${C.bool(t.excluded) ? " · לא נספר" : ""}</div></td>
             <td class="n ${t.type === "income" ? "t-good" : ""}">${t.type === "income" ? "+" : ""}${C.fmtMoney(t.amount)}</td>
-            <td>${biz ? h`<span class="badge gold" title="נספר בהוצאות העסק, לא בתקציב המשפחה">💼 עסק · ${t.businessCategory || "שונות"}</span>` : h`<select data-change="fSetCat" data-id="${t.id}" style="min-height:32px;padding:4px 6px;font-size:12.5px">${catOptions(t.category || "לא מסווג", t.type)}</select>`}</td>
-            <td class="nowrap">${t.type === "expense" && !C.bool(t.excluded) ? h`<button class="btn btn-ghost btn-xs" data-act="txBiz" data-id="${t.id}" title="${biz ? "להחזיר לתקציב המשפחה" : "הוצאה של העסק - להעביר לעסק"}" aria-label="${biz ? "להחזיר למשפחה" : "להעביר לעסק"}">${biz ? "↩" : "💼"}</button>` : ""}<button class="btn btn-ghost btn-xs" data-act="editTx" data-id="${t.id}" aria-label="עריכה">✎</button></td></tr>`;
+            <td>${biz ? (t.type === "income" ? h`<span class="badge gold" title="כבר נספר בהכנסות העסק - לא נספר שוב כאן">💼 הכנסה מהעסק${t.matchNote ? " · " + t.matchNote : ""}</span>` : h`<span class="badge gold" title="נספר בהוצאות העסק, לא בתקציב המשפחה">💼 עסק · ${t.businessCategory || "שונות"}</span>`) : h`<select data-change="fSetCat" data-id="${t.id}" style="min-height:32px;padding:4px 6px;font-size:12.5px">${catOptions(t.category || "לא מסווג", t.type)}</select>`}</td>
+            <td class="nowrap">${!C.bool(t.excluded) ? h`<button class="btn btn-ghost btn-xs" data-act="txBiz" data-id="${t.id}" title="${biz ? "להחזיר לתקציב המשפחה" : t.type === "income" ? "תשלום מלקוח שכבר רשום בעסק - לא לספור פעמיים" : "הוצאה של העסק - להעביר לעסק"}" aria-label="${biz ? "להחזיר למשפחה" : "להעביר לעסק"}">${biz ? "↩" : "💼"}</button>` : ""}<button class="btn btn-ghost btn-xs" data-act="editTx" data-id="${t.id}" aria-label="עריכה">✎</button></td></tr>`;
         }) : h`<tr><td colspan="5" class="empty">אין תנועות</td></tr>`}</tbody></table></div></div>
     </div>`;
   };
@@ -175,7 +180,13 @@
   }
   Actions.txBiz = async function (t) {
     var tx = C.byId(App.db.family_tx, t.dataset.id);
-    if (C.bool(tx.business)) { App.save("family_tx", [{ id: tx.id, business: "", businessCategory: "" }], { msg: "הוחזר לתקציב המשפחה" }); return; }
+    if (C.bool(tx.business)) { App.save("family_tx", [{ id: tx.id, business: "", businessCategory: "", paymentId: "", matchNote: "" }], { msg: "הוחזר לתקציב המשפחה" }); return; }
+    if (tx.type === "income") {
+      var hit = C.matchClientPayments(App.db, [tx], 14)[0];
+      App.save("family_tx", [{ id: tx.id, business: "true", paymentId: hit ? hit.id : "", matchNote: hit ? "תשלום של " + App.clientName(hit.clientId) + " מ-" + C.fmtDate(hit.date) : "" }],
+        { msg: "סומן כהכנסה מהעסק" + (hit ? " (" + App.clientName(hit.clientId) + ")" : "") + " - לא ייספר פעמיים" });
+      return;
+    }
     bizModal(tx.description, async function (cat, pat) {
       var upd = [{ id: tx.id, business: "true", businessCategory: cat }];
       if (pat) (App.db.family_tx || []).forEach(function (x) {
@@ -270,6 +281,13 @@
       });
     }
     show();
+  };
+  Actions.matchDeposits = async function () {
+    var list = (App.db.family_tx || []).filter(function (x) { return C.monthKey(x.date) === ui.month && !C.bool(x.excluded); });
+    var hits = C.matchClientPayments(App.db, list);
+    var upd = Object.keys(hits).map(function (k) { var x = list[k], p = hits[k]; return { id: x.id, business: "true", paymentId: p.id, matchNote: "תשלום של " + App.clientName(p.clientId) + " מ-" + C.fmtDate(p.date) }; });
+    if (!upd.length) return;
+    await App.save("family_tx", upd, { msg: upd.length + " הפקדות סומנו כהכנסה מהעסק" });
   };
   Actions.fGoMonth = function (t) { ui.month = t.dataset.m; ui.catFilter = ""; App.render(); };
   Actions.fCat = function (t) { ui.catFilter = ui.catFilter === t.dataset.cat ? "" : t.dataset.cat; App.render(); };
@@ -460,6 +478,12 @@
       t.include = !t.dup;
       t.i = i;
       return t;
+    }).map(function (t, i, all) {
+      if (i === 0) {
+        var hits = C.matchClientPayments(App.db, all);
+        Object.keys(hits).forEach(function (k) { var x = all[k], pay = hits[k]; x.business = true; x.paymentId = pay.id; x.matchNote = "תשלום של " + App.clientName(pay.clientId) + " מ-" + C.fmtDate(pay.date); });
+      }
+      return t;
     });
   }
 
@@ -473,7 +497,8 @@
     }
     var inc = imp.txs.filter(function (t) { return t.include; });
     var counted = inc.filter(function (t) { return !t.excluded && !t.business; });
-    var bizSum = inc.filter(function (t) { return t.business && !t.excluded; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var bizSum = inc.filter(function (t) { return t.business && !t.excluded && t.type !== "income"; }).reduce(function (s, t) { return s + t.amount; }, 0);
+    var depSum = inc.filter(function (t) { return t.business && t.type === "income"; }).reduce(function (s, t) { return s + t.amount; }, 0);
     var bills = inc.filter(function (t) { return t.excluded; });
     var sumExp = counted.filter(function (t) { return t.type === "expense"; }).reduce(function (s, t) { return s + t.amount; }, 0);
     var sumInc = counted.filter(function (t) { return t.type === "income"; }).reduce(function (s, t) { return s + t.amount; }, 0);
@@ -487,7 +512,7 @@
         ${colSel("date", "עמודת תאריך")}${colSel("desc", "עמודת תיאור")}${colSel("amount", "עמודת סכום")}${colSel("debit", "עמודת חובה")}${colSel("credit", "עמודת זכות")}
       </div>` : h`<p class="small muted" style="margin-bottom:10px">PDF נקרא לפי שורות טקסט - מומלץ לעבור על הרשימה. אם הבנק מאפשר, ייצוא ל-Excel מדויק יותר.</p>`}
       <div class="row" style="margin-bottom:10px"><span class="badge info">${inc.length} ייובאו</span><span class="badge">${imp.txs.length - inc.length} דולגו${imp.txs.some(function (t) { return t.dup; }) ? " (כולל כפילויות)" : ""}</span>
-        <span class="small">הוצאות משפחה ${C.fmtMoney(sumExp)} · הכנסות ${C.fmtMoney(sumInc)}${bizSum ? " · 💼 לעסק " + C.fmtMoney(bizSum) : ""}</span>
+        <span class="small">הוצאות משפחה ${C.fmtMoney(sumExp)} · הכנסות ${C.fmtMoney(sumInc)}${bizSum ? " · 💼 לעסק " + C.fmtMoney(bizSum) : ""}${depSum ? " · 💼 הכנסות מהעסק (כבר נספרו) " + C.fmtMoney(depSum) : ""}</span>
         <span class="grow"></span><button class="btn btn-primary" data-act="impSave">שמירת ${inc.length} תנועות</button><button class="btn btn-outline" data-act="impCancel">ביטול</button></div>
       ${bills.length ? h`<div class="aitem info" style="margin-bottom:10px">💳 ${bills.length} חיובי כרטיס אשראי בדוח הבנק (${C.fmtMoney(bills.reduce(function (s, t) { return s + t.amount; }, 0))}) נשמרים אבל <b>לא נספרים</b> - את הפירוט שלהם מייבאים מדוח האשראי עצמו, כדי שלא ייספרו פעמיים.</div>` : ""}
       ${imp.map && imp.map.billDate ? h`<div class="small muted" style="margin-bottom:8px">דוח אשראי: כל העסקאות נרשמות בחודש החיוב (${C.fmtDate(imp.map.billDate)}). תאריך הקנייה מופיע ליד כל עסקה.</div>` : ""}
@@ -499,8 +524,8 @@
             ${t.branch || t.note ? h`<div class="small muted">${[t.branch, t.note].filter(Boolean).join(" · ")}</div>` : ""}</td>
           <td class="n">${C.fmtMoney(t.amount)}</td>
           <td><select data-change="impType" data-i="${t.i}" style="min-height:30px;padding:3px 6px;font-size:12.5px;width:auto">${UI.options([["expense", "הוצאה"], ["income", "הכנסה"]], t.type)}</select></td>
-          <td>${t.business ? h`<span class="badge gold">💼 עסק · ${t.businessCategory}</span>` : h`<select data-change="impCat" data-i="${t.i}" style="min-height:30px;padding:3px 6px;font-size:12.5px">${catOptions(t.category, t.type)}</select>`}</td>
-          <td>${t.type === "expense" && !t.excluded ? h`<button class="btn btn-ghost btn-xs" data-act="impBiz" data-i="${t.i}" title="הוצאה של העסק">${t.business ? "↩ משפחה" : "💼 לעסק"}</button>` : ""}</td></tr>`;
+          <td>${t.business ? (t.type === "income" ? h`<span class="badge gold" title="${t.matchNote || ""}">💼 הכנסה מהעסק${t.matchNote ? " · " + t.matchNote : ""}</span>` : h`<span class="badge gold">💼 עסק · ${t.businessCategory}</span>`) : h`<select data-change="impCat" data-i="${t.i}" style="min-height:30px;padding:3px 6px;font-size:12.5px">${catOptions(t.category, t.type)}</select>`}</td>
+          <td>${!t.excluded ? h`<button class="btn btn-ghost btn-xs" data-act="impBiz" data-i="${t.i}" title="${t.type === "income" ? "תשלום מלקוח שכבר רשום בעסק" : "הוצאה של העסק"}">${t.business ? "↩ משפחה" : "💼 עסק"}</button>` : ""}</td></tr>`;
       })}</tbody></table></div></div>`;
   }
   function reparse() {
@@ -548,7 +573,8 @@
   };
   Actions.impBiz = function (t) {
     var x = ui.imp.txs[+t.dataset.i];
-    if (x.business) { x.business = false; x.businessCategory = ""; App.render(); return; }
+    if (x.business) { x.business = false; x.businessCategory = ""; x.paymentId = ""; x.matchNote = ""; App.render(); return; }
+    if (x.type === "income") { x.business = true; App.render(); return; }
     bizModal(x.description, function (cat, pat) {
       x.business = true; x.businessCategory = cat;
       if (pat) ui.imp.txs.forEach(function (y) { if (y.type === "expense" && !y.excluded && String(y.description).indexOf(pat) !== -1) { y.business = true; y.businessCategory = cat; } });
@@ -563,7 +589,8 @@
       return { id: C.uid("ft"), date: x.date, description: x.description, amount: x.amount, type: x.type, category: x.category, account: imp.account,
         source: "import", importBatch: batch, importFile: imp.file, importedAt: at,
         purchaseDate: x.purchaseDate || "", branch: x.branch || "", note: x.note || "",
-        excluded: x.excluded ? "true" : "", business: x.business ? "true" : "", businessCategory: x.business ? x.businessCategory : "" };
+        excluded: x.excluded ? "true" : "", business: x.business ? "true" : "", businessCategory: x.business ? (x.businessCategory || "") : "",
+        paymentId: x.paymentId || "", matchNote: x.matchNote || "" };
     });
     if (!rows.length) { UI.toast("לא נבחרו תנועות", true); return; }
     t.disabled = true;
