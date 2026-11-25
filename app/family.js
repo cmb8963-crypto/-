@@ -134,7 +134,12 @@
               <td class="nowrap" style="width:1%">${r.category !== "לא מסווג" ? h`<button class="btn btn-ghost btn-xs" data-act="editCatName" data-cat="${r.category}" title="עריכת הקטגוריה: שם, קבוצה, תקציב" aria-label="עריכת קטגוריה">✎</button>` : ""}</td></tr>`;
           })}</tbody></table></div>`;
         })}
-        ${!f.categories.length ? h`<div class="empty">אין נתונים לחודש זה. <a href="#family/import">ייבוא דוחות</a></div>` : ""}
+        ${!f.categories.length ? (function () {
+          var last = (App.db.family_tx || []).map(function (x) { return C.monthKey(x.date); }).filter(Boolean).sort().pop();
+          return last && last !== ui.month
+            ? h`<div class="empty">אין תנועות ב${C.monthLabel(ui.month)}.<div style="margin-top:10px"><button class="btn btn-primary btn-sm" data-act="fGoMonth" data-m="${last}">מעבר ל${C.monthLabel(last)} (החודש האחרון עם נתונים)</button></div></div>`
+            : h`<div class="empty">אין נתונים לחודש זה. <a href="#family/import">ייבוא דוחות</a></div>`;
+        })() : ""}
         <div class="row" style="margin-top:12px"><button class="btn btn-outline btn-sm" data-act="newCat">+ קטגוריה חדשה</button><a class="btn btn-ghost btn-sm" href="#family/budget">כל הקטגוריות והתקציב ←</a></div>
       </div>
       <div class="card"><div class="card-title"><h3>תנועות (${tx.length})</h3></div>
@@ -178,6 +183,7 @@
       await App.save("family_tx", upd, { msg: upd.length > 1 ? upd.length + " הוצאות הועברו לעסק" : "הועבר להוצאות העסק" });
     });
   };
+  Actions.fGoMonth = function (t) { ui.month = t.dataset.m; ui.catFilter = ""; App.render(); };
   Actions.fCat = function (t) { ui.catFilter = ui.catFilter === t.dataset.cat ? "" : t.dataset.cat; App.render(); };
   Actions.fTxSearch = function (t) { ui.txSearch = t.value; App.render(); };
   Actions.fAcc = function (t) { ui.accFilter = t.value; App.render(); };
