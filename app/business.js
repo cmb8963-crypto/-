@@ -1073,11 +1073,11 @@
   };
 
   function expenseForm(e) {
-    e = e || { date: C.ymd(new Date()), recurring: "none", category: C.BUSINESS_EXPENSE_CATS[0] };
+    e = e || { date: C.ymd(new Date()), recurring: "none", category: C.businessCats(App.settings())[0] };
     var m = UI.modal({
       title: e.id ? "עריכת הוצאה" : "הוצאה עסקית חדשה",
       body: h`<div class="form-grid" id="expBox">
-        <label class="field"><span>קטגוריה</span><input type="text" name="category" value="${e.category}" list="expCats"><datalist id="expCats">${C.BUSINESS_EXPENSE_CATS.map(function (c) { return h`<option value="${c}">`; })}</datalist></label>
+        <label class="field"><span>קטגוריה</span><input type="text" name="category" value="${e.category}" list="expCats"><datalist id="expCats">${C.businessCats(App.settings()).map(function (c) { return h`<option value="${c}">`; })}</datalist></label>
         <label class="field"><span>סכום ₪</span><input type="number" name="amount" value="${e.amount}" min="0" step="0.01"></label>
         <label class="field"><span>תאריך / חודש התחלה</span><input type="date" name="date" value="${e.date}"></label>
         <label class="field"><span>חזרה</span><select name="recurring">${UI.options([["none", "חד-פעמית"], ["monthly", "כל חודש"], ["yearly", "כל שנה"]], e.recurring)}</select></label>

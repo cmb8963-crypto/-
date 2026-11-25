@@ -219,6 +219,12 @@ var Core = (function () {
       sessionPrices: Array.isArray(sp) && sp.length ? sp.map(num).filter(function (x) { return x > 0; }) : SESSION_PRICES
     };
   }
+  // Business expense categories: the list saved in Settings, or the defaults.
+  function businessCats(st) {
+    var v = st && st.businessExpenseCats;
+    if (typeof v === "string") { try { v = JSON.parse(v); } catch (e) { v = null; } }
+    return Array.isArray(v) && v.length ? v.map(String).filter(Boolean) : BUSINESS_EXPENSE_CATS.slice();
+  }
   function packageName(units, unitType) { return "סל " + units + " " + (unitType === "hour" ? "שעות" : "פגישות"); }
   // Price per session/hour after the client's fixed discount.
   function effectiveRate(client) { return Math.max(0, num(client && client.rate) - num(client && client.discount)); }
@@ -796,7 +802,7 @@ var Core = (function () {
   return {
     SESSION_STATUS: SESSION_STATUS, CONSUMING: CONSUMING, PAY_METHODS: PAY_METHODS, PRICING_MODELS: PRICING_MODELS,
     UNIT_TYPES: UNIT_TYPES, PACKAGE_PRESETS: PACKAGE_PRESETS, SESSION_PRICES: SESSION_PRICES, priceList: priceList,
-    packageName: packageName, effectiveRate: effectiveRate, BUSINESS_EXPENSE_CATS: BUSINESS_EXPENSE_CATS,
+    packageName: packageName, effectiveRate: effectiveRate, BUSINESS_EXPENSE_CATS: BUSINESS_EXPENSE_CATS, businessCats: businessCats,
     FAMILY_GROUPS: FAMILY_GROUPS, DEFAULT_FAMILY_CATEGORIES: DEFAULT_FAMILY_CATEGORIES, DEFAULT_FAMILY_RULES: DEFAULT_FAMILY_RULES,
     ACCOUNTS: ACCOUNTS, DEFAULT_SETTINGS: DEFAULT_SETTINGS, HE_MONTHS: HE_MONTHS, HE_DAYS: HE_DAYS,
     uid: uid, num: num, round2: round2, pad: pad, toDate: toDate, ymd: ymd, ymdhm: ymdhm, monthKey: monthKey,
