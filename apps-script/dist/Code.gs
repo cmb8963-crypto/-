@@ -577,9 +577,10 @@ var Core = (function () {
     ["עמלת", "עמלות וריבית"], ["דמי כרטיס", "עמלות וריבית"], ["הלואה", "החזר הלוואות"], ["הלוואה", "החזר הלוואות"],
     ["משכנתא", "שכר דירה / משכנתא"], ["גמל", "חסכונות והפרשות"]
   ].map(function (r) { return { pattern: r[0], category: r[1], priority: "0" }; });   // same level as the starter rules: the more specific text wins
-  function bestRule(desc, rules) {
+  function bestRule(desc, rules, known) {
     var d = String(desc || "").toLowerCase(), best = null;
-    (rules || []).concat(BUILTIN_RULES).forEach(function (r) {
+    var builtin = known ? BUILTIN_RULES.filter(function (r) { return known.indexOf(r.category) !== -1; }) : BUILTIN_RULES;
+    (rules || []).concat(builtin).forEach(function (r) {
       var p = String(r.pattern || "").toLowerCase();
       if (!p || !wordMatch(d, p)) return;
       if (!best || num(r.priority) > num(best.priority) || (num(r.priority) === num(best.priority) && p.length > String(best.pattern).length)) best = r;
@@ -603,12 +604,15 @@ var Core = (function () {
    * A matching rule wins (personal rules first, then the most specific text); a rule marked
    * "business" sends the expense to the business. Otherwise the card's branch decides.
    */
-  function classify(desc, rules, branch) {
-    var r = bestRule(desc, rules);
+  // known (optional): the family's current category names - only those may be chosen,
+  // so a deleted category never comes back through an old rule or a built-in hint.
+  function classify(desc, rules, branch, known) {
+    var ok = function (name) { return !known || known.indexOf(name) !== -1; };
+    var r = bestRule(desc, (rules || []).filter(function (x) { return bool(x.business) || ok(x.category); }), known);
     if (r && bool(r.business)) return { category: "לא מסווג", business: true, businessCategory: r.category };
     if (r) return { category: r.category, business: false };
     var b = BRANCH_CATEGORY[String(branch || "").trim()];
-    return { category: b || "לא מסווג", business: false };
+    return { category: b && ok(b) ? b : "לא מסווג", business: false };
   }
   // A credit-card bill in the bank statement: its details come from the card's own statement,
   // so counting it too would count every purchase twice.

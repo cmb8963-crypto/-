@@ -26,6 +26,7 @@
     })).concat([h`<option value="__new">➕ קטגוריה חדשה...</option>`]);
   }
   function bizCats() { return C.businessCats(App.settings()); }
+  function catNames() { return (App.db.family_categories || []).map(function (c) { return c.name; }); }
   // "➕ קטגוריה חדשה..." picked in a dropdown: create it, then use it there.
   function newCatFromSelect(sel, type, use) {
     sel.value = sel.dataset.prev || "לא מסווג";
@@ -114,7 +115,7 @@
     f.categories.forEach(function (r) { (groups[r.group] = groups[r.group] || []).push(r); });
     var order = Object.keys(C.FAMILY_GROUPS);
     return h`<div class="page-head"><div><h1>פירוט חודשי</h1><div class="sub">כל ההכנסות וההוצאות, עם אפשרות עריכה וסיווג ידני</div></div>
-      <div class="row">${monthNav()}<button class="btn btn-primary btn-sm" data-act="newTx">+ תנועה ידנית</button></div></div>
+      <div class="row">${monthNav()}${f.uncategorized ? h`<button class="btn btn-primary btn-sm" data-act="sortTx">🗂 מיון שורה-שורה (${f.uncategorized})</button>` : ""}<button class="btn btn-outline btn-sm" data-act="newTx">+ תנועה ידנית</button></div></div>
     <div class="grid grid-4">
       <div class="tile"><div class="lbl">הכנסה מהעסק (נטו)</div><div class="val">${C.fmtMoney(f.businessNet)}</div><div class="hint">גבייה ${C.fmtMoney(f.business.collected)} פחות הוצאות ${C.fmtMoney(f.business.expenseTotal)}</div></div>
       <div class="tile"><div class="lbl">הכנסות אחרות</div><div class="val">${C.fmtMoney(f.otherIncome)}</div></div>
@@ -182,6 +183,93 @@
       });
       await App.save("family_tx", upd, { msg: upd.length > 1 ? upd.length + " הוצאות הועברו לעסק" : "הועבר להוצאות העסק" });
     });
+  };
+  // ---------------------------------------------------------------- start over
+  Actions.resetCats = async function () {
+    var n = (App.db.family_categories || []).length;
+    var txs = (App.db.family_tx || []).filter(function (x) { return x.category && x.category !== "לא מסווג"; });
+    var rules = (App.db.family_rules || []).filter(function (r) { return !C.bool(r.business); });
+    if (!(await UI.confirm("התחלה מחדש", "יימחקו " + n + " הקטגוריות של המשפחה ו-" + rules.length + " חוקי הסיווג שלהן, ו-" + txs.length +
+      " תנועות יחזרו ל\"לא מסווג\". הוצאות העסק (💼) והחוקים שלהן נשארים. אחר כך ממיינים שורה-שורה ויוצרים רק את הקטגוריות שצריך.", "מחיקה והתחלה מחדש", true))) return;
+    if (txs.length) await App.save("family_tx", txs.map(function (x) { return { id: x.id, category: "לא מסווג" }; }), { toast: false, silent: true });
+    if (rules.length) await App.remove("family_rules", rules.map(function (r) { return r.id; }));
+    if (n) await App.remove("family_categories", (App.db.family_categories || []).map(function (c) { return c.id; }));
+    var last = (App.db.family_tx || []).map(function (x) { return C.monthKey(x.date); }).filter(Boolean).sort().pop();
+    if (last) ui.month = last;
+    location.hash = "#family/month";
+    UI.toast("הקטגוריות נמחקו - עכשיו אפשר למיין שורה-שורה");
+  };
+
+  // ---------------------------------------------------------------- sort one by one
+  // Shows one uncategorised transaction at a time with a button per category.
+  Actions.sortTx = function () {
+    var skipped = {};
+    var m = UI.modal({ title: "🗂 מיון שורה-שורה", wide: true, body: h`<div id="sortBox"></div>`,
+      foot: h`<span class="small muted" id="sortLeft"></span><span class="grow"></span><button class="btn btn-outline" data-close>סיום</button>`,
+      onClose: function () { App.render(); } });
+    function queue() {
+      return (App.db.family_tx || []).filter(function (t) {
+        return C.monthKey(t.date) === ui.month && !C.bool(t.excluded) && !C.bool(t.business) && (!t.category || t.category === "לא מסווג") && !skipped[t.id];
+      }).sort(function (a, b) { return C.num(b.amount) - C.num(a.amount); });
+    }
+    function show() {
+      var q = queue(), t = q[0];
+      m.$("#sortLeft").textContent = q.length ? "נשארו " + q.length + " ב" + C.monthLabel(ui.month) : "";
+      if (!t) { UI.setHtml(m.$("#sortBox"), h`<div class="empty">✓ כל התנועות של ${C.monthLabel(ui.month)} ממוינות</div>`); return; }
+      var key = suggestPattern(t.description);
+      var same = q.filter(function (x) { return x.id !== t.id && key && String(x.description).indexOf(key) !== -1; }).length;
+      var groups = {};
+      cats().forEach(function (c) {
+        if (t.type === "income" ? c.group !== "income" : c.group === "income") return;
+        (groups[c.group] = groups[c.group] || []).push(c.name);
+      });
+      UI.setHtml(m.$("#sortBox"), h`<div class="aitem" style="display:block;padding:14px 16px">
+          <div class="row between"><b style="font-size:18px">${t.description}</b><b style="font-size:20px" class="${t.type === "income" ? "t-good" : ""}">${t.type === "income" ? "+" : ""}${C.fmtMoney(t.amount)}</b></div>
+          <div class="small muted" style="margin-top:4px">${[C.fmtDate(t.date), t.purchaseDate && t.purchaseDate !== t.date ? "קנייה " + C.fmtDate(t.purchaseDate) : "", t.account, t.branch, t.note].filter(Boolean).join(" · ")}</div></div>
+        ${Object.keys(groups).length ? Object.keys(C.FAMILY_GROUPS).filter(function (g) { return groups[g]; }).map(function (g) {
+          return h`<div class="small muted" style="margin:12px 0 6px">${C.FAMILY_GROUPS[g]}</div><div class="chips">${groups[g].map(function (n) { return h`<button type="button" class="chip" data-pick="${n}">${n}</button>`; })}</div>`;
+        }) : h`<p class="small muted" style="margin-top:12px">עוד אין קטגוריות - צרו את הראשונה כאן למטה.</p>`}
+        <div class="row" style="margin-top:14px;gap:8px;flex-wrap:wrap">
+          <input type="text" id="sortNew" placeholder="קטגוריה חדשה, למשל: מזון" style="flex:1;min-width:180px">
+          <select id="sortGroup" style="width:auto">${UI.options(Object.keys(C.FAMILY_GROUPS).filter(function (g) { return t.type === "income" ? g === "income" : g !== "income"; }).map(function (g) { return [g, C.FAMILY_GROUPS[g]]; }), t.type === "income" ? "income" : "current")}</select>
+          <button type="button" class="btn btn-primary btn-sm" id="sortAdd">יצירה ושיוך</button></div>
+        ${key ? h`<label class="check" style="margin-top:12px"><input type="checkbox" id="sortRemember" checked> לזכור: כל תנועה שמכילה <b>${key}</b> תסווג כך גם בעתיד${same ? " (וגם " + same + " נוספות עכשיו)" : ""}</label>` : ""}
+        <div class="row" style="margin-top:14px;gap:8px">
+          ${t.type === "expense" ? h`<button type="button" class="btn btn-outline btn-sm" id="sortBiz">💼 הוצאה של העסק</button>` : ""}
+          <button type="button" class="btn btn-ghost btn-sm" id="sortSkip">דלג ←</button></div>`);
+      async function assign(name) {
+        var remember = m.$("#sortRemember") && m.$("#sortRemember").checked;
+        var upd = [{ id: t.id, category: name }];
+        if (remember && key) {
+          queue().forEach(function (x) { if (x.id !== t.id && String(x.description).indexOf(key) !== -1) upd.push({ id: x.id, category: name }); });
+          var has = (App.db.family_rules || []).some(function (r) { return r.pattern === key && r.category === name; });
+          if (!has) await App.save("family_rules", [{ id: C.uid("fr"), pattern: key, category: name, priority: "1" }], { toast: false, silent: true });
+        }
+        await App.save("family_tx", upd, { toast: false, silent: true });
+        show();
+      }
+      UI.$$("[data-pick]", m.el).forEach(function (b) { b.addEventListener("click", function () { assign(b.dataset.pick); }); });
+      async function addNew() {
+        var name = m.$("#sortNew").value.trim();
+        if (!name) { m.$("#sortNew").focus(); return; }
+        if (!(App.db.family_categories || []).some(function (c) { return c.name === name; }))
+          await App.save("family_categories", [{ id: C.uid("fc"), name: name, group: m.$("#sortGroup").value, budget: "" }], { toast: false, silent: true });
+        assign(name);
+      }
+      m.$("#sortAdd").addEventListener("click", addNew);
+      m.$("#sortNew").addEventListener("keydown", function (e) { if (e.key === "Enter") addNew(); });
+      m.$("#sortSkip").addEventListener("click", function () { skipped[t.id] = true; show(); });
+      var bz = m.$("#sortBiz");
+      if (bz) bz.addEventListener("click", function () {
+        bizModal(t.description, async function (cat, pat) {
+          var upd = [{ id: t.id, business: "true", businessCategory: cat }];
+          if (pat) queue().forEach(function (x) { if (x.id !== t.id && x.type === "expense" && String(x.description).indexOf(pat) !== -1) upd.push({ id: x.id, business: "true", businessCategory: cat }); });
+          await App.save("family_tx", upd, { toast: false, silent: true });
+          show();
+        });
+      });
+    }
+    show();
   };
   Actions.fGoMonth = function (t) { ui.month = t.dataset.m; ui.catFilter = ""; App.render(); };
   Actions.fCat = function (t) { ui.catFilter = ui.catFilter === t.dataset.cat ? "" : t.dataset.cat; App.render(); };
@@ -361,7 +449,7 @@
     var seen = {};
     return txs.map(function (t, i) {
       t.account = account;
-      var k = C.classify(t.description, rules, t.branch);
+      var k = C.classify(t.description, rules, t.branch, catNames());
       t.category = k.category;
       t.business = k.business; t.businessCategory = k.businessCategory || "";
       // the card bill in the bank statement: its purchases come from the card statement itself
@@ -546,7 +634,7 @@
     var totBud = list.filter(function (c) { return c.group !== "income"; }).reduce(function (s, c) { return s + C.num(c.budget); }, 0);
     var totInc = list.filter(function (c) { return c.group === "income"; }).reduce(function (s, c) { return s + C.num(c.budget); }, 0);
     return h`<div class="page-head"><div><h1>תקציב וקטגוריות</h1><div class="sub">תקציב חודשי לכל סעיף - חריגה תוצג כהתראה בדשבורד</div></div>
-      <div class="row"><button class="btn btn-primary btn-sm" data-act="newCat">+ קטגוריה</button><button class="btn btn-outline btn-sm" data-act="editBizCats">💼 קטגוריות העסק</button></div></div>
+      <div class="row"><button class="btn btn-primary btn-sm" data-act="newCat">+ קטגוריה</button><button class="btn btn-outline btn-sm" data-act="editBizCats">💼 קטגוריות העסק</button><button class="btn btn-bad btn-sm" data-act="resetCats">🗑 התחלה מחדש</button></div></div>
     <p class="small muted" style="margin:-6px 0 12px">לחיצה על ✎ ליד קטגוריה: שינוי שם (מעדכן את כל התנועות והחוקים), העברה לקבוצה אחרת, תקציב, או מחיקה. שינוי שם לשם של קטגוריה קיימת מאחד את שתיהן.</p>
     <div class="grid grid-4"><div class="tile"><div class="lbl">הכנסות מתוכננות</div><div class="val">${C.fmtMoney(totInc)}</div></div>
       <div class="tile"><div class="lbl">תקציב הוצאות חודשי</div><div class="val">${C.fmtMoney(totBud)}</div></div>
@@ -669,7 +757,7 @@
     var rules = sortedRules();
     var upd = (App.db.family_tx || []).filter(function (t) { return (!t.category || t.category === "לא מסווג") && !C.bool(t.business); })
       .map(function (t) {
-        var k = C.classify(t.description, rules, t.branch);
+        var k = C.classify(t.description, rules, t.branch, catNames());
         if (k.business && t.type === "expense") return { id: t.id, business: "true", businessCategory: k.businessCategory };
         return { id: t.id, category: k.category };
       })
