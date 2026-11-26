@@ -74,7 +74,7 @@ var Core = (function () {
     annual: "הוצאות שנתיות / מעגל השנה",
     debt: "החזרי חובות וחסכונות",
     unexpected: "לא צפויות",
-    business: "💼 הוצאות העסק (לא נספרות במשפחה)"
+    business: "💼 של העסק (לא נספר במשפחה)"
   };
 
   var DEFAULT_FAMILY_CATEGORIES = [

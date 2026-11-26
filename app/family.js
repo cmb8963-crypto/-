@@ -16,7 +16,7 @@
   function catOptions(selected, type) {
     var groups = {};
     cats().forEach(function (c) {
-      if (type === "income" && c.group !== "income") return;
+      if (type === "income" && c.group !== "income" && c.group !== "business") return;
       if (type === "expense" && c.group === "income") return;
       (groups[c.group] = groups[c.group] || []).push(c.name);
     });
@@ -236,7 +236,7 @@
       var same = q.filter(function (x) { return x.id !== t.id && key && String(x.description).indexOf(key) !== -1; }).length;
       var groups = {};
       cats().forEach(function (c) {
-        if (t.type === "income" ? c.group !== "income" : c.group === "income") return;
+        if (t.type === "income" ? (c.group !== "income" && c.group !== "business") : c.group === "income") return;
         (groups[c.group] = groups[c.group] || []).push(c.name);
       });
       UI.setHtml(m.$("#sortBox"), h`<div class="aitem" style="display:block;padding:14px 16px">
@@ -247,7 +247,7 @@
         }) : h`<p class="small muted" style="margin-top:12px">עוד אין קטגוריות - צרו את הראשונה כאן למטה.</p>`}
         <div class="row" style="margin-top:14px;gap:8px;flex-wrap:wrap">
           <input type="text" id="sortNew" placeholder="קטגוריה חדשה, למשל: מזון" style="flex:1;min-width:180px">
-          <select id="sortGroup" style="width:auto">${UI.options(Object.keys(C.FAMILY_GROUPS).filter(function (g) { return t.type === "income" ? g === "income" : g !== "income"; }).map(function (g) { return [g, C.FAMILY_GROUPS[g]]; }), t.type === "income" ? "income" : "current")}</select>
+          <select id="sortGroup" style="width:auto">${UI.options(Object.keys(C.FAMILY_GROUPS).filter(function (g) { return t.type === "income" ? (g === "income" || g === "business") : g !== "income"; }).map(function (g) { return [g, C.FAMILY_GROUPS[g]]; }), t.type === "income" ? "income" : "current")}</select>
           <button type="button" class="btn btn-primary btn-sm" id="sortAdd">יצירה ושיוך</button></div>
         ${key ? h`<label class="check" style="margin-top:12px"><input type="checkbox" id="sortRemember" checked> לזכור: כל תנועה שמכילה <b>${key}</b> תסווג כך גם בעתיד${same ? " (וגם " + same + " נוספות עכשיו)" : ""}</label>` : ""}
         <div class="row" style="margin-top:14px;gap:8px">
