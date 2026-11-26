@@ -1020,6 +1020,7 @@
   };
 
   // ================================================================ P&L
+  Actions.pnlDetail = function () { ui.pnlDetail = !ui.pnlDetail; App.render(); };
   Pages["biz/pnl"] = function () {
     var db = App.db, st = App.settings();
     if (!ui.pnlYear) ui.pnlYear = String(new Date().getFullYear());
@@ -1030,6 +1031,8 @@
     var cats = {};
     bms.forEach(function (b) { Object.keys(b.expensesByCategory).forEach(function (k) { cats[k] = true; }); });
     cats = Object.keys(cats);
+    var allCats = cats;
+    if (!ui.pnlDetail) cats = [];   // compact by default: one "total expenses" column
     var target = C.num(st.monthlyIncomeTarget);
     var sessT = C.monthlySessionTarget(st);
     // Year totals count months up to today; later months are a forecast of recurring costs.
@@ -1047,13 +1050,13 @@
       <div class="tile"><div class="lbl">פגישות שהתקיימו</div><div class="val">${tot.held}</div><div class="hint">יעד שנתי ${sessT * 12}</div></div></div>
     <div class="card section">${UI.barChart({ title: "רווח נקי חודשי", labels: months.map(function (m) { return C.HE_MONTHS[+m.slice(5) - 1].slice(0, 3) + "׳"; }), fullLabels: months.map(C.monthLabel),
         series: [{ name: "גבייה בפועל", color: "var(--series-1)", values: bms.map(function (b) { return b.collected; }) }, { name: "הוצאות", color: "var(--series-2)", values: bms.map(function (b) { return b.expenseTotal; }) }], format: C.fmtMoney })}</div>
-    <div class="card section"><div class="card-title"><h3>טבלה חודשית</h3><button class="btn btn-outline btn-sm" data-act="exportPnl">ייצוא</button></div>
+    <div class="card section"><div class="card-title"><h3>טבלה חודשית</h3><div class="row">${allCats.length ? h`<button class="chip ${ui.pnlDetail ? "active" : ""}" data-act="pnlDetail">${ui.pnlDetail ? "הסתרת פירוט ההוצאות" : "פירוט הוצאות לפי קטגוריה"}</button>` : ""}<button class="btn btn-outline btn-sm" data-act="exportPnl">ייצוא</button></div></div>
       <div class="table-wrap"><table class="t"><thead><tr><th>חודש</th><th class="n">פגישות</th><th class="n">גבייה בפועל</th>${cats.map(function (k) { return h`<th class="n">${k}</th>`; })}<th class="n">סה"כ הוצאות</th><th class="n">רווח נקי</th><th class="n">% מהיעד</th></tr></thead>
       <tbody>${bms.map(function (b, i) {
         var pct = target ? b.net / target : 0;
         return h`<tr class="click" data-act="pnlMonth" data-m="${months[i]}" style="${months[i] > nowMk ? "opacity:.55" : ""}"><td class="nowrap">${C.monthLabel(months[i])}${months[i] > nowMk ? h` <span class="badge">צפי</span>` : ""}</td><td class="n">${b.heldCount}</td><td class="n">${C.fmtMoney(b.collected)}</td>
           ${cats.map(function (k) { return h`<td class="n">${b.expensesByCategory[k] ? C.fmtMoney(b.expensesByCategory[k]) : ""}</td>`; })}
-          <td class="n">${C.fmtMoney(b.expenseTotal)}</td><td class="n"><b class="${b.net < 0 ? "t-bad" : ""}">${C.fmtMoney(b.net)}</b></td>
+          <td class="n" title="${Object.keys(b.expensesByCategory).map(function (k) { return k + ": " + C.fmtMoney(b.expensesByCategory[k]); }).join("\n")}">${C.fmtMoney(b.expenseTotal)}</td><td class="n"><b class="${b.net < 0 ? "t-bad" : ""}">${C.fmtMoney(b.net)}</b></td>
           <td class="n"><span class="badge ${pct >= 1 ? "good" : pct >= .8 ? "warn" : b.collected || b.expenseTotal ? "bad" : ""}">${Math.round(pct * 100)}%</span></td></tr>`;
       })}</tbody><tfoot><tr><td>סה"כ</td><td class="n">${tot.held}</td><td class="n">${C.fmtMoney(tot.col)}</td>${cats.map(function () { return h`<td></td>`; })}<td class="n">${C.fmtMoney(tot.exp)}</td><td class="n">${C.fmtMoney(tot.net)}</td><td></td></tr></tfoot></table></div></div>
     <div class="card section"><div class="card-title"><h3>הוצאות ${C.monthLabel(ui.pnlMonth)}</h3>${monthNav("pnlMonth", ui.pnlMonth, false)}</div>
