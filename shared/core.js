@@ -690,7 +690,7 @@ var Core = (function () {
     (db.family_tx || []).forEach(function (t) { if (t.paymentId) used[t.paymentId] = true; });
     var out = {};
     (txs || []).forEach(function (t, i) {
-      if (t.type !== "income" || bool(t.business) || t.paymentId) return;
+      if (t.type !== "income" || bool(t.business) || bool(t.excluded) || t.paymentId) return;
       var td = toDate(t.date); if (!td) return;
       var best = null, bestGap = 1e9;
       (db.payments || []).forEach(function (p) {
@@ -700,6 +700,29 @@ var Core = (function () {
         if (gap <= days && gap < bestGap) { best = p; bestGap = gap; }
       });
       if (best) { used[best.id] = true; out[i] = best; }
+    });
+    return out;
+  }
+
+  /*
+   * Transfers between the family's own accounts: money out of one account and the same
+   * amount into another account within `days` days. Both sides are neither income nor
+   * expense. txs: new transactions (with .account); returns { txIndex: existingTx | {i} }.
+   */
+  function matchTransfers(db, txs, days) {
+    days = days || 3;
+    var out = {}, taken = {};
+    function near(a, b) { var x = toDate(a.date), y = toDate(b.date); return x && y && Math.abs(x - y) / 864e5 <= days; }
+    function pair(a, b) {
+      return a.account && b.account && a.account !== b.account && a.type !== b.type &&
+        Math.abs(num(a.amount) - num(b.amount)) < 0.01 && near(a, b) && !bool(b.business);
+    }
+    (txs || []).forEach(function (t, i) {
+      if (out[i] || bool(t.business)) return;
+      var hit = null;
+      (db.family_tx || []).some(function (e) { if (!taken[e.id] && !bool(e.excluded) && pair(t, e)) { hit = e; return true; } return false; });
+      if (hit) { taken[hit.id] = true; out[i] = hit; return; }
+      for (var j = i + 1; j < txs.length; j++) if (!out[j] && pair(t, txs[j])) { out[i] = { i: j }; out[j] = { i: i }; return; }
     });
     return out;
   }
@@ -851,7 +874,7 @@ var Core = (function () {
     fmtMoney: fmtMoney, monthLabel: monthLabel, byId: byId, bool: bool, settingsOf: settingsOf,
     monthlySessionTarget: monthlySessionTarget, sessionUnits: sessionUnits, sessionsOf: sessionsOf,
     clientAccount: clientAccount, allAccounts: allAccounts, monthlyMonths: monthlyMonths, expensesForMonth: expensesForMonth,
-    businessMonth: businessMonth, kpi: kpi, categorize: categorize, classify: classify, isCardBill: isCardBill, matchClientPayments: matchClientPayments,
+    businessMonth: businessMonth, kpi: kpi, categorize: categorize, classify: classify, isCardBill: isCardBill, matchClientPayments: matchClientPayments, matchTransfers: matchTransfers,
     BRANCH_CATEGORY: BRANCH_CATEGORY, familyMonth: familyMonth,
     loansSummary: loansSummary, txFingerprint: txFingerprint, freeSlots: freeSlots, hmToMin: hmToMin,
     minToHm: minToHm, portalView: portalView, nameTokens: nameTokens, matchClient: matchClient, escapeHtml: escapeHtml

@@ -163,7 +163,7 @@
         ${tx.length ? tx.map(function (t) {
             var biz = C.bool(t.business);
           return h`<tr style="${C.bool(t.excluded) ? "opacity:.45" : ""}"><td class="nowrap small">${C.fmtDate(t.date)}${t.purchaseDate && t.purchaseDate !== t.date ? h`<div class="muted">קנייה ${C.fmtDate(t.purchaseDate)}</div>` : ""}</td>
-            <td><div>${t.description}</div><div class="small muted">${[t.account, t.branch, t.note].filter(Boolean).join(" · ")}${C.bool(t.excluded) ? " · לא נספר" : ""}${!biz && bizGroupCats()[t.category] ? h` · <b style="color:var(--gold-deep)">💼 נספר רק בעסק</b>` : ""}</div></td>
+            <td><div>${t.description}</div><div class="small muted">${[t.account, t.branch, t.note].filter(Boolean).join(" · ")}${C.bool(t.excluded) ? " · לא נספר" + (t.matchNote ? " (" + t.matchNote + ")" : "") : ""}${!biz && bizGroupCats()[t.category] ? h` · <b style="color:var(--gold-deep)">💼 נספר רק בעסק</b>` : ""}</div></td>
             <td class="n ${t.type === "income" ? "t-good" : ""}">${t.type === "income" ? "+" : ""}${C.fmtMoney(t.amount)}</td>
             <td>${biz ? (t.type === "income" ? h`<span class="badge gold" title="כבר נספר בהכנסות העסק - לא נספר שוב כאן">💼 הכנסה מהעסק${t.matchNote ? " · " + t.matchNote : ""}</span>` : h`<span class="badge gold" title="נספר בהוצאות העסק, לא בתקציב המשפחה">💼 עסק · ${t.businessCategory || "שונות"}</span>`) : h`<select data-change="fSetCat" data-id="${t.id}" style="min-height:32px;padding:4px 6px;font-size:12.5px">${catOptions(t.category || "לא מסווג", t.type)}</select>`}</td>
             <td class="nowrap">${!C.bool(t.excluded) ? h`<button class="btn btn-ghost btn-xs" data-act="txBiz" data-id="${t.id}" title="${biz ? "להחזיר לתקציב המשפחה" : t.type === "income" ? "תשלום מלקוח שכבר רשום בעסק - לא לספור פעמיים" : "הוצאה של העסק - להעביר לעסק"}" aria-label="${biz ? "להחזיר למשפחה" : "להעביר לעסק"}">${biz ? "↩" : "💼"}</button>` : ""}<button class="btn btn-ghost btn-xs" data-act="txSkip" data-id="${t.id}" title="${C.bool(t.excluded) ? "לספור שוב בתקציב" : "לא הכנסה ולא הוצאה (החזר מחבר, העברה בין חשבונות) - לא לספור"}" aria-label="לא לספור">${C.bool(t.excluded) ? "↺" : "⊘"}</button><button class="btn btn-ghost btn-xs" data-act="editTx" data-id="${t.id}" aria-label="עריכה">✎</button></td></tr>`;
@@ -512,6 +512,16 @@
       return t;
     }).map(function (t, i, all) {
       if (i === 0) {
+        // transfers between the family's own accounts: neither income nor expense
+        var tr = C.matchTransfers(App.db, all.filter(function (x) { return !x.dup; }));
+        var live = all.filter(function (x) { return !x.dup; });
+        Object.keys(tr).forEach(function (k) {
+          var x = live[k], other = tr[k];
+          var o = other.i !== undefined ? live[other.i] : other;
+          x.excluded = true; x.transfer = true;
+          x.matchNote = "העברה " + (x.type === "income" ? "מ" : "ל") + (o.account || "חשבון אחר");
+          if (other.id) x.transferPair = other.id;   // an earlier import: marked too when saving
+        });
         var hits = C.matchClientPayments(App.db, all);
         Object.keys(hits).forEach(function (k) { var x = all[k], pay = hits[k]; x.business = true; x.paymentId = pay.id; x.matchNote = "תשלום של " + App.clientName(pay.clientId) + " מ-" + C.fmtDate(pay.date); });
       }
@@ -552,7 +562,7 @@
       ${imp.txs.map(function (t) {
         return h`<tr style="${t.include ? (t.excluded ? "opacity:.6" : "") : "opacity:.5"}"><td><input type="checkbox" data-change="impInc" data-i="${t.i}" ${t.include ? raw("checked") : ""} aria-label="לכלול"></td>
           <td class="nowrap small">${C.fmtDate(t.date)}${t.purchaseDate && t.purchaseDate !== t.date ? h`<div class="muted">קנייה ${C.fmtDate(t.purchaseDate)}</div>` : ""}</td>
-          <td>${t.description}${t.dup ? h` <span class="badge warn">קיים כבר</span>` : ""}${t.excluded ? h` <span class="badge">חיוב כרטיס - לא נספר</span>` : ""}
+          <td>${t.description}${t.dup ? h` <span class="badge warn">קיים כבר</span>` : ""}${t.excluded ? h` <span class="badge">${t.transfer ? "⊘ " + t.matchNote + " - לא נספר" : "חיוב כרטיס - לא נספר"}</span>` : ""}
             ${t.branch || t.note ? h`<div class="small muted">${[t.branch, t.note].filter(Boolean).join(" · ")}</div>` : ""}</td>
           <td class="n">${C.fmtMoney(t.amount)}</td>
           <td><select data-change="impType" data-i="${t.i}" style="min-height:30px;padding:3px 6px;font-size:12.5px;width:auto">${UI.options([["expense", "הוצאה"], ["income", "הכנסה"]], t.type)}</select></td>
@@ -624,11 +634,16 @@
         excluded: x.excluded ? "true" : "", business: x.business ? "true" : "", businessCategory: x.business ? (x.businessCategory || "") : "",
         paymentId: x.paymentId || "", matchNote: x.matchNote || "" };
     });
+    // the other side of a transfer, imported earlier from another account
+    var pairs = imp.txs.filter(function (x) { return x.include && x.transferPair; }).map(function (x) {
+      return { id: x.transferPair, excluded: "true", matchNote: "העברה " + (x.type === "income" ? "ל" : "מ") + imp.account };
+    });
     if (!rows.length) { UI.toast("לא נבחרו תנועות", true); return; }
     t.disabled = true;
     var months = {};
     rows.forEach(function (r) { months[C.monthKey(r.date)] = true; });
-    var saved = await App.save("family_tx", rows, { msg: rows.length + " תנועות נשמרו" });
+    var saved = await App.save("family_tx", rows, { msg: rows.length + " תנועות נשמרו" + (pairs.length ? " · " + pairs.length + " העברות בין חשבונות זוהו" : "") });
+    if (saved && pairs.length) await App.save("family_tx", pairs, { toast: false, silent: true });
     if (saved) {
       ui.imp = null;
       ui.month = Object.keys(months).sort().pop();

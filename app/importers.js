@@ -53,7 +53,7 @@ var Importers = (function () {
   var HEAD = {
     date: /^(תאריך( ה?עסקה| רכישה| פעולה)?|date)$/i,
     date2: /תאריך/,
-    desc: /(שם בית ה?עסק|בית עסק|תיאור|תאור|פרטים|description|merchant)/i,
+    desc: /(שם בית ה?עסק|בית עסק|תיאור|תאור|פרטים|סוג תנועה|description|merchant)/i,
     descWeak: /(הפעולה|סוג פעולה)/,   // only when nothing better exists (often a numeric code)
     branch: /^(ענף|קטגוריה|category)$/i,
     note: /^(הערות|פרטים נוספים|notes)$/i,
