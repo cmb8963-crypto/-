@@ -112,22 +112,25 @@
       if (q && String(t.description || "").toLowerCase().indexOf(q) === -1) return false;
       return true;
     }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+    // business transactions live in the business tab; shown here only on request
+    var bizG = bizGroupCats();
+    var bizRows = tx.filter(function (t) { return C.bool(t.business) || bizG[t.category]; });
+    if (!ui.showBiz) tx = tx.filter(function (t) { return !(C.bool(t.business) || bizG[t.category]); });
     var groups = {};
     f.categories.forEach(function (r) { (groups[r.group] = groups[r.group] || []).push(r); });
     var order = Object.keys(C.FAMILY_GROUPS);
     return h`<div class="page-head"><div><h1>פירוט חודשי</h1><div class="sub">כל ההכנסות וההוצאות, עם אפשרות עריכה וסיווג ידני</div></div>
       <div class="row">${monthNav()}${f.uncategorized ? h`<button class="btn btn-primary btn-sm" data-act="sortTx">🗂 מיון שורה-שורה (${f.uncategorized})</button>` : ""}<button class="btn btn-outline btn-sm" data-act="newTx">+ תנועה ידנית</button></div></div>
     <div class="grid grid-4">
-      <div class="tile"><div class="lbl">הכנסה מהעסק (נטו)</div><div class="val">${C.fmtMoney(f.businessNet)}</div><div class="hint">גבייה ${C.fmtMoney(f.business.collected)} פחות הוצאות ${C.fmtMoney(f.business.expenseTotal)}</div></div>
-      <div class="tile"><div class="lbl">הכנסות אחרות</div><div class="val">${C.fmtMoney(f.otherIncome)}</div></div>
-      <div class="tile"><div class="lbl">הוצאות</div><div class="val">${C.fmtMoney(f.totalExpense)}</div></div>
-      <div class="tile ${f.balance >= 0 ? "good" : "bad"}"><div class="lbl">יתרה</div><div class="val">${C.fmtMoney(f.balance)}</div></div></div>
+      <div class="tile"><div class="lbl">💼 נכנס מהעסק (נטו)</div><div class="val">${C.fmtMoney(f.businessNet)}</div><div class="hint"><a href="#biz/pnl">הפירוט בניהול העסק ←</a></div></div>
+      <div class="tile"><div class="lbl">הכנסות אחרות</div><div class="val">${C.fmtMoney(f.otherIncome)}</div><div class="hint">משכורות, קצבאות ועוד</div></div>
+      <div class="tile"><div class="lbl">הוצאות המשפחה</div><div class="val">${C.fmtMoney(f.totalExpense)}</div></div>
+      <div class="tile ${f.balance >= 0 ? "good" : "bad"}"><div class="lbl">נשאר החודש</div><div class="val">${C.fmtMoney(f.balance)}</div><div class="hint">כל ההכנסות פחות ההוצאות</div></div></div>
     ${(function () {
       var cand = Object.keys(C.matchClientPayments(App.db, (App.db.family_tx || []).filter(function (x) { return C.monthKey(x.date) === ui.month && !C.bool(x.excluded); }))).length;
       return cand ? h`<div class="aitem warn" style="margin-top:12px">🔗 <span>${cand} הפקדות בבנק נראות כמו תשלומים מלקוחות שכבר רשומים בעסק (אותו סכום, תאריך קרוב).</span><button class="btn btn-primary btn-xs" data-act="matchDeposits">סימון כ"הכנסה מהעסק"</button></div>` : "";
     })()}
-    ${f.businessDepositsCount ? h`<div class="aitem" style="margin-top:12px">💼 <span>${f.businessDepositsCount} הפקדות מלקוחות (${C.fmtMoney(f.businessDeposits)}) כבר נספרות ב"הכנסה מהעסק (נטו)" - לא נספרות שוב.</span></div>` : ""}
-    ${f.businessPaidCount ? h`<div class="aitem" style="margin-top:12px">💼 <span>${f.businessPaidCount} הוצאות עסק ששולמו מהחשבונות הפרטיים (${C.fmtMoney(f.businessPaid)}) עברו להוצאות העסק ולא נספרות כאן.</span><a class="btn btn-ghost btn-xs" href="#biz/pnl">לרווח והפסד ←</a></div>` : ""}
+    ${f.businessDepositsCount || f.businessPaidCount ? h`<p class="small muted" style="margin:8px 2px 0">💼 תנועות של העסק בבנק ובאשראי (תשלומי לקוחות, הוצאות עסק) כבר כלולות ב"נכנס מהעסק" - הן מסומנות 💼 ברשימה ולא נספרות כאן פעמיים.</p>` : ""}
     <div class="grid section fam-split" style="align-items:start">
       <div class="card"><div class="card-title"><h3>לפי קטגוריות</h3>${ui.catFilter ? h`<button class="chip active" data-act="fCat" data-cat="">סינון: ${ui.catFilter} ✕</button>` : ""}</div>
         ${order.filter(function (g) { return groups[g]; }).map(function (g) {
@@ -151,7 +154,8 @@
       </div>
       <div class="card"><div class="card-title"><h3>תנועות (${tx.length})</h3></div>
         <div class="toolbar"><input type="search" placeholder="חיפוש בית עסק..." value="${ui.txSearch}" data-change="fTxSearch" aria-label="חיפוש">
-          <select data-change="fAcc" aria-label="חשבון">${UI.options([["", "כל החשבונות"]].concat(accounts().map(function (a) { return [a, a]; })), ui.accFilter)}</select></div>
+          <select data-change="fAcc" aria-label="חשבון">${UI.options([["", "כל החשבונות"]].concat(accounts().map(function (a) { return [a, a]; })), ui.accFilter)}</select>
+          ${bizRows.length ? h`<button class="chip ${ui.showBiz ? "active" : ""}" data-act="fShowBiz" title="תנועות שכבר נספרות בעסק">💼 ${ui.showBiz ? "הסתרת" : "הצגת"} ${bizRows.length} תנועות העסק</button>` : ""}</div>
         <div class="table-wrap" style="max-height:70vh;overflow:auto"><table class="t"><thead><tr><th>תאריך</th><th>תיאור</th><th class="n">סכום</th><th>קטגוריה</th><th></th></tr></thead><tbody>
         ${tx.length ? tx.map(function (t) {
             var biz = C.bool(t.business);
@@ -297,6 +301,7 @@
     if (!upd.length) return;
     await App.save("family_tx", upd, { msg: upd.length + " הפקדות סומנו כהכנסה מהעסק" });
   };
+  Actions.fShowBiz = function () { ui.showBiz = !ui.showBiz; App.render(); };
   Actions.fGoMonth = function (t) { ui.month = t.dataset.m; ui.catFilter = ""; App.render(); };
   Actions.fCat = function (t) { ui.catFilter = ui.catFilter === t.dataset.cat ? "" : t.dataset.cat; App.render(); };
   Actions.fTxSearch = function (t) { ui.txSearch = t.value; App.render(); };
