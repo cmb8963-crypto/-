@@ -132,11 +132,14 @@
     })()}
     ${f.businessDepositsCount || f.businessPaidCount ? h`<p class="small muted" style="margin:8px 2px 0">💼 תנועות של העסק בבנק ובאשראי (תשלומי לקוחות, הוצאות עסק) כבר כלולות ב"נכנס מהעסק" - הן מסומנות 💼 ברשימה ולא נספרות כאן פעמיים.</p>` : ""}
     <div class="grid section fam-split" style="align-items:start">
-      <div class="card"><div class="card-title"><h3>לפי קטגוריות</h3>${ui.catFilter ? h`<button class="chip active" data-act="fCat" data-cat="">סינון: ${ui.catFilter} ✕</button>` : ""}</div>
-        ${order.filter(function (g) { return groups[g]; }).map(function (g) {
-          var rows = groups[g].sort(function (a, b) { return b.actual - a.actual; });
+      <div class="card"><div class="card-title"><h3>לפי קטגוריות</h3>${ui.catFilter ? h`<button class="chip active" data-act="fCat" data-cat="">סינון: ${ui.catFilter === "__business" ? "הכנסה מהעסק" : ui.catFilter} ✕</button>` : ""}</div>
+        ${order.filter(function (g) { return groups[g] || (g === "income" && f.businessNet); }).map(function (g) {
+          var rows = (groups[g] || []).sort(function (a, b) { return b.actual - a.actual; });
           return h`<h4 class="small muted" style="margin:12px 0 6px">${C.FAMILY_GROUPS[g]}</h4>
-          <div class="table-wrap"><table class="t"><tbody>${rows.map(function (r) {
+          <div class="table-wrap"><table class="t"><tbody>
+          ${g === "income" && f.businessNet ? h`<tr class="click ${ui.catFilter === "__business" ? "flag-good" : ""}" data-act="fCat" data-cat="__business" style="background:var(--cream2,#F2E9DA)">
+            <td><b>💼 הכנסה מהעסק (נטו)</b></td><td class="n"><b>${C.fmtMoney(f.businessNet)}</b></td><td style="width:30%" class="small muted">לחצו לסיכום ←</td><td></td></tr>` : ""}
+          ${rows.map(function (r) {
             var cls = r.over ? "bad" : r.pct > .85 ? "warn" : "good";
             return h`<tr class="click ${r.over ? "flag-bad" : ""}" data-act="fCat" data-cat="${r.category}"><td>${r.category}${r.over ? h` <span class="badge bad">חריגה</span>` : ""}</td>
               <td class="n">${C.fmtMoney(r.actual)}${r.budget ? h`<span class="small muted"> / ${C.fmtMoney(r.budget)}</span>` : ""}</td>
@@ -152,7 +155,7 @@
         })() : ""}
         <div class="row" style="margin-top:12px"><button class="btn btn-outline btn-sm" data-act="newCat">+ קטגוריה חדשה</button><a class="btn btn-ghost btn-sm" href="#family/budget">כל הקטגוריות והתקציב ←</a></div>
       </div>
-      <div class="card"><div class="card-title"><h3>תנועות (${tx.length})</h3></div>
+      ${ui.catFilter === "__business" ? bizSummary(f) : h`<div class="card"><div class="card-title"><h3>תנועות (${tx.length})</h3></div>
         <div class="toolbar"><input type="search" placeholder="חיפוש בית עסק..." value="${ui.txSearch}" data-change="fTxSearch" aria-label="חיפוש">
           <select data-change="fAcc" aria-label="חשבון">${UI.options([["", "כל החשבונות"]].concat(accounts().map(function (a) { return [a, a]; })), ui.accFilter)}</select>
           ${bizRows.length ? h`<button class="chip ${ui.showBiz ? "active" : ""}" data-act="fShowBiz" title="תנועות שכבר נספרות בעסק">💼 ${ui.showBiz ? "הסתרת" : "הצגת"} ${bizRows.length} תנועות העסק</button>` : ""}</div>
@@ -164,7 +167,7 @@
             <td class="n ${t.type === "income" ? "t-good" : ""}">${t.type === "income" ? "+" : ""}${C.fmtMoney(t.amount)}</td>
             <td>${biz ? (t.type === "income" ? h`<span class="badge gold" title="כבר נספר בהכנסות העסק - לא נספר שוב כאן">💼 הכנסה מהעסק${t.matchNote ? " · " + t.matchNote : ""}</span>` : h`<span class="badge gold" title="נספר בהוצאות העסק, לא בתקציב המשפחה">💼 עסק · ${t.businessCategory || "שונות"}</span>`) : h`<select data-change="fSetCat" data-id="${t.id}" style="min-height:32px;padding:4px 6px;font-size:12.5px">${catOptions(t.category || "לא מסווג", t.type)}</select>`}</td>
             <td class="nowrap">${!C.bool(t.excluded) ? h`<button class="btn btn-ghost btn-xs" data-act="txBiz" data-id="${t.id}" title="${biz ? "להחזיר לתקציב המשפחה" : t.type === "income" ? "תשלום מלקוח שכבר רשום בעסק - לא לספור פעמיים" : "הוצאה של העסק - להעביר לעסק"}" aria-label="${biz ? "להחזיר למשפחה" : "להעביר לעסק"}">${biz ? "↩" : "💼"}</button>` : ""}<button class="btn btn-ghost btn-xs" data-act="txSkip" data-id="${t.id}" title="${C.bool(t.excluded) ? "לספור שוב בתקציב" : "לא הכנסה ולא הוצאה (החזר מחבר, העברה בין חשבונות) - לא לספור"}" aria-label="לא לספור">${C.bool(t.excluded) ? "↺" : "⊘"}</button><button class="btn btn-ghost btn-xs" data-act="editTx" data-id="${t.id}" aria-label="עריכה">✎</button></td></tr>`;
-        }) : h`<tr><td colspan="5" class="empty">אין תנועות</td></tr>`}</tbody></table></div></div>
+        }) : h`<tr><td colspan="5" class="empty">אין תנועות</td></tr>`}</tbody></table></div></div>`}
     </div>`;
   };
   // Business expense picker: business category + optional rule for next time.
@@ -301,6 +304,22 @@
     if (!upd.length) return;
     await App.save("family_tx", upd, { msg: upd.length + " הפקדות סומנו כהכנסה מהעסק" });
   };
+  // Small business summary for the family view: collected by payment method, expenses, net.
+  function bizSummary(f) {
+    var bm = f.business, by = {};
+    (bm.payments || []).forEach(function (p) { var k = p.method || "other"; by[k] = by[k] || { n: 0, sum: 0 }; by[k].n++; by[k].sum += C.num(p.amount); });
+    var order = Object.keys(C.PAY_METHODS).filter(function (k) { return by[k]; });
+    return h`<div class="card"><div class="card-title"><h3>💼 סיכום העסק - ${C.monthLabel(ui.month)}</h3><a class="small" href="#biz/pnl">לפירוט המלא ←</a></div>
+      <div class="table-wrap"><table class="t"><tbody>
+        ${order.length ? order.map(function (k) {
+          return h`<tr><td>הכנסות ב${C.PAY_METHODS[k]}</td><td class="small muted">${by[k].n} תשלומים</td><td class="n t-good">${C.fmtMoney(by[k].sum)}</td></tr>`;
+        }) : h`<tr><td colspan="3" class="empty">אין תשלומים מלקוחות בחודש זה</td></tr>`}
+        <tr><td><b>סה"כ נגבה מלקוחות</b></td><td></td><td class="n"><b>${C.fmtMoney(bm.collected)}</b></td></tr>
+        <tr><td>סה"כ הוצאות העסק</td><td class="small muted">${(bm.expenses || []).length} הוצאות</td><td class="n t-bad">-${C.fmtMoney(bm.expenseTotal)}</td></tr>
+      </tbody><tfoot><tr><td><b>💼 נטו - נכנס למשפחה</b></td><td></td><td class="n"><b style="font-size:17px">${C.fmtMoney(bm.net)}</b></td></tr></tfoot></table></div>
+      ${f.businessNet !== bm.net ? h`<p class="small muted" style="margin-top:8px">בהגדרות נקבע שהכנסות העסק לא נכנסות לתקציב המשפחה.</p>` : ""}
+    </div>`;
+  }
   Actions.fShowBiz = function () { ui.showBiz = !ui.showBiz; App.render(); };
   Actions.fGoMonth = function (t) { ui.month = t.dataset.m; ui.catFilter = ""; App.render(); };
   Actions.fCat = function (t) { ui.catFilter = ui.catFilter === t.dataset.cat ? "" : t.dataset.cat; App.render(); };
