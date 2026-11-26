@@ -724,12 +724,21 @@
         <label class="field"><span>קבוצה</span><select name="group">${UI.options(Object.keys(C.FAMILY_GROUPS).map(function (g) { return [g, C.FAMILY_GROUPS[g]]; }), c.group)}</select></label>
         <label class="field"><span>תקציב חודשי ₪</span><input type="number" name="budget" value="${c.budget}" min="0"></label>
         <label class="field"><span>תקציב שנתי ₪ (לסעיפים שנתיים)</span><input type="number" name="annualBudget" value="${c.annualBudget}" min="0"></label>
-        <label class="field span-2"><span>הערות</span><input type="text" name="notes" value="${c.notes}"></label></div>`,
+        <label class="field span-2"><span>הערות</span><input type="text" name="notes" value="${c.notes}"></label>
+        ${c.id && oldName ? h`<label class="field span-2" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px"><span>איחוד לתוך קטגוריה אחרת (אופציונלי)</span>
+          <select id="mergeInto">${UI.options([["", "— לא לאחד —"]].concat(cats().filter(function (x) { return x.name !== oldName; }).map(function (x) { return [x.name, x.name + " (" + (C.FAMILY_GROUPS[x.group] || "") + ")"]; })), "")}</select>
+          <span class="small muted">כל התנועות והחוקים של "${oldName}" יעברו לקטגוריה שנבחרה, ו"${oldName}" תימחק.</span></label>` : ""}</div>`,
       foot: h`<button class="btn btn-primary" data-save>שמירה</button>${c.id ? h`<button class="btn btn-bad" data-del>מחיקה</button>` : ""}<button class="btn btn-outline" data-close>ביטול</button>`
     });
     m.$("[name=annualBudget]").addEventListener("input", function () { if (!m.$("[name=budget]").value || c.annualBudget) m.$("[name=budget]").value = Math.round(C.num(this.value) / 12) || ""; });
     m.$("[data-save]").addEventListener("click", async function () {
       var d = UI.formData(m.$("#catBox"));
+      var into = m.$("#mergeInto") ? m.$("#mergeInto").value : "";
+      if (into) {
+        // merge = rename into an existing category (handled below, with the same confirmation)
+        var target = (App.db.family_categories || []).filter(function (x) { return x.name === into; })[0];
+        d = { name: into, group: target ? target.group : d.group, budget: target ? target.budget : d.budget, annualBudget: target ? target.annualBudget : d.annualBudget, notes: target ? target.notes : d.notes };
+      }
       if (!d.name) { UI.toast("יש להזין שם", true); return; }
       d.id = c.id;
       var other = (App.db.family_categories || []).filter(function (x) { return x.name === d.name && x.id !== c.id; })[0];
